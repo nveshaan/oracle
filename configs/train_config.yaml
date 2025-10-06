@@ -1,9 +1,10 @@
 defaults:
   - override hydra/job_logging: disabled
   
+data_path: "data"
 results_dir: "results"
 
-model: "DiT-XL/2"   # choices: [list(DiT_models.keys())]
+model: "DiT-B"   # choices: [list(DiT_models.keys())]
 
 epochs: 1400
 batch_size: 256

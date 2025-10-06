@@ -79,7 +79,7 @@ def main(cfg: DictConfig):
     print(f"Experiment directory created at {experiment_dir}")
 
     # Create model:
-    trendline_size = (30, 5)
+    trendline_size = (5, 30)
     model = DiT_models[cfg.model](
         input_size=trendline_size,
     )
@@ -103,7 +103,7 @@ def main(cfg: DictConfig):
     print(f"Dataset contains {len(dataset):,} trendlines ({cfg.data_path})")
 
     # Prepare models for training:
-    update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
+    update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
 
@@ -115,19 +115,20 @@ def main(cfg: DictConfig):
 
     print(f"Training for {cfg.epochs} epochs...")
     for epoch in range(cfg.epochs):
-        print(f"Beginning epoch {epoch}...")
         loop = tqdm(loader, desc=f"Epoch {epoch+1}", leave=False)
-        for x, y in enumerate(loop):
-            x = x.to(device)
-            y = y.to(device)
-            t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            model_kwargs = dict(y=y)
+        for batch_idx, batch in enumerate(loop):
+            x, cond = batch
+            x = x.to(device, dtype=torch.float32)
+            cond = cond.to(device, dtype=torch.float32)
+            # cond = tuple(c.to(device, dtype=torch.float32) for c in cond)
+            t = torch.randint(0, diffusion.num_timesteps, (x.size(0),), device=device)
+            model_kwargs = dict(y=cond)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
             loss.backward()
             opt.step()
-            update_ema(ema, model.module)
+            update_ema(ema, model)
 
             # Log loss values:
             loop.set_postfix(loss=loss.item())
@@ -155,7 +156,7 @@ def main(cfg: DictConfig):
             # Save DiT checkpoint:
             if train_steps % cfg.ckpt_every == 0 and train_steps > 0:
                 checkpoint = {
-                    "model": model.module.state_dict(),
+                    "model": model.state_dict(),
                     "ema": ema.state_dict(),
                     "opt": opt.state_dict(),
                     "cfg": cfg

@@ -71,9 +71,9 @@ class TrendlineEmbedder(nn.Module):
     def __init__(self, hidden_size, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.embedder = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=(5, 1), stride=(1, 5)),
+            nn.Conv2d(1, 16, kernel_size=(5, 1), stride=(5, 1)),
             nn.Tanh(),
-            nn.Conv2d(16, 32, kernel_size=(1, 5), padding=(2, 0)),
+            nn.Conv2d(16, 32, kernel_size=(1, 5), padding=(0, 2)),
             nn.Tanh(),
             nn.Conv2d(32, 64, kernel_size=(4, 1)),
             nn.Tanh(),
@@ -211,7 +211,8 @@ class DiT(nn.Module):
         self.apply(_basic_init)
 
         # Initialize (and freeze) pos_embed by sin-cos embedding:
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.x_embedder.num_patches ** 0.5))
+        gh, gw = self.x_embedder.grid_size
+        pos_embed = get_2d_sincos_pos_embed_non_square(self.pos_embed.shape[-1], gh, gw)
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
         # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
@@ -219,8 +220,11 @@ class DiT(nn.Module):
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.x_embedder.proj.bias, 0)
 
-        # Initialize label embedding table:
-        # nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
+        # Initialize trendline embedder params:
+        nn.init.normal_(self.y_embedder.embedder[0].weight, std=0.02)
+        nn.init.normal_(self.y_embedder.embedder[2].weight, std=0.02)
+        nn.init.normal_(self.y_embedder.embedder[4].weight, std=0.02)
+        nn.init.normal_(self.y_embedder.embedder[7].weight, std=0.02)
 
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -238,19 +242,14 @@ class DiT(nn.Module):
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
     def unpatchify(self, x):
-        """
-        x: (N, T, patch_size**2 * C)
-        imgs: (N, H, W, C)
-        """
+        N, T, _ = x.shape
         c = self.out_channels
-        p = self.x_embedder.patch_size[0]
-        h = w = int(x.shape[1] ** 0.5)
-        assert h * w == x.shape[1]
-
-        x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
-        x = torch.einsum('nhwpqc->nchpwq', x)
-        imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
-        return imgs
+        gh, gw = self.x_embedder.grid_size  # (grid_h, grid_w)
+        p_h, p_w = self.x_embedder.patch_size
+        assert gh * gw == T, "Token count mismatch"
+        x = x.reshape(N, gh, gw, p_h, p_w, c)            # (N, gh, gw, ph, pw, C)
+        x = x.permute(0, 5, 1, 3, 2, 4).contiguous()     # (N, C, gh, ph, gw, pw)
+        return x.reshape(N, c, gh * p_h, gw * p_w)
 
     def forward(self, x, t, y):
         """
@@ -311,6 +310,17 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=
     return pos_embed
 
 
+def get_2d_sincos_pos_embed_non_square(embed_dim, grid_h, grid_w, cls_token=False, extra_tokens=0):
+    grid_h_vec = np.arange(grid_h, dtype=np.float32)
+    grid_w_vec = np.arange(grid_w, dtype=np.float32)
+    grid = np.meshgrid(grid_w_vec, grid_h_vec)  # w first
+    grid = np.stack(grid, axis=0).reshape([2, 1, grid_h, grid_w])
+    pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
+    if cls_token and extra_tokens > 0:
+        pos_embed = np.concatenate([np.zeros([extra_tokens, embed_dim]), pos_embed], axis=0)
+    return pos_embed
+
+
 def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     assert embed_dim % 2 == 0
 
@@ -329,7 +339,7 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     out: (M, D)
     """
     assert embed_dim % 2 == 0
-    omega = np.arange(embed_dim // 2, dtype=np.float64)
+    omega = np.arange(embed_dim // 2, dtype=np.float32)
     omega /= embed_dim / 2.
     omega = 1. / 10000**omega  # (D/2,)
 
@@ -347,46 +357,22 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #                                   DiT Configs                                  #
 #################################################################################
 
-def DiT_XL_2(**kwargs):
+def DiT_XL(**kwargs):
     return DiT(depth=28, hidden_size=1152, patch_size=(1, 5), num_heads=16, **kwargs)
 
-def DiT_XL_4(**kwargs):
-    return DiT(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
+def DiT_L(**kwargs):
+    return DiT(depth=24, hidden_size=1024, patch_size=(1, 5), num_heads=16, **kwargs)
 
-def DiT_XL_8(**kwargs):
-    return DiT(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
+def DiT_B(**kwargs):
+    return DiT(depth=12, hidden_size=768, patch_size=(1, 5), num_heads=12, **kwargs)
 
-def DiT_L_2(**kwargs):
-    return DiT(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
-
-def DiT_L_4(**kwargs):
-    return DiT(depth=24, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
-
-def DiT_L_8(**kwargs):
-    return DiT(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
-
-def DiT_B_2(**kwargs):
-    return DiT(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
-
-def DiT_B_4(**kwargs):
-    return DiT(depth=12, hidden_size=768, patch_size=4, num_heads=12, **kwargs)
-
-def DiT_B_8(**kwargs):
-    return DiT(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
-
-def DiT_S_2(**kwargs):
-    return DiT(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
-
-def DiT_S_4(**kwargs):
-    return DiT(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
-
-def DiT_S_8(**kwargs):
-    return DiT(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
+def DiT_S(**kwargs):
+    return DiT(depth=12, hidden_size=384, patch_size=(1, 5), num_heads=6, **kwargs)
 
 
 DiT_models = {
-    'DiT-XL/2': DiT_XL_2,  'DiT-XL/4': DiT_XL_4,  'DiT-XL/8': DiT_XL_8,
-    'DiT-L/2':  DiT_L_2,   'DiT-L/4':  DiT_L_4,   'DiT-L/8':  DiT_L_8,
-    'DiT-B/2':  DiT_B_2,   'DiT-B/4':  DiT_B_4,   'DiT-B/8':  DiT_B_8,
-    'DiT-S/2':  DiT_S_2,   'DiT-S/4':  DiT_S_4,   'DiT-S/8':  DiT_S_8,
+    'DiT-XL': DiT_XL,
+    'DiT-L':  DiT_L,
+    'DiT-B':  DiT_B,
+    'DiT-S':  DiT_S,
 }
