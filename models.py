@@ -65,8 +65,26 @@ class TimestepEmbedder(nn.Module):
 
 
 class TrendlineEmbedder(nn.Module):
-    def __init__(self, *args, **kwargs):
+    """
+    Embeds different trendlines into one single vector.
+    """
+    def __init__(self, hidden_size, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.embedder = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=(5, 1), stride=(1, 5)),
+            nn.Tanh(),
+            nn.Conv2d(16, 32, kernel_size=(1, 5), padding=(2, 0)),
+            nn.Tanh(),
+            nn.Conv2d(32, 64, kernel_size=(4, 1)),
+            nn.Tanh(),
+            nn.Flatten(),
+            nn.Linear(1920, hidden_size),
+            nn.Tanh(),
+        )
+    
+    def forward(self, y):
+        y_emb = self.embedder(y)
+        return y_emb
 
 
 # class LabelEmbedder(nn.Module):
@@ -134,7 +152,7 @@ class FinalLayer(nn.Module):
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
+        self.linear = nn.Linear(hidden_size, patch_size[0] * patch_size[1] * out_channels, bias=True)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 2 * hidden_size, bias=True)
@@ -153,9 +171,9 @@ class DiT(nn.Module):
     """
     def __init__(
         self,
-        input_size=32,
-        patch_size=2,
-        in_channels=4,
+        input_size=(30, 5),
+        patch_size=(1, 5),
+        in_channels=1,
         hidden_size=1152,
         depth=28,
         num_heads=16,
@@ -172,7 +190,7 @@ class DiT(nn.Module):
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
         # self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
-        self.y_embedder = TrendlineEmbedder()
+        self.y_embedder = TrendlineEmbedder(hidden_size)
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
@@ -202,7 +220,7 @@ class DiT(nn.Module):
         nn.init.constant_(self.x_embedder.proj.bias, 0)
 
         # Initialize label embedding table:
-        nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
 
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -243,7 +261,7 @@ class DiT(nn.Module):
         """
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
-        y = self.y_embedder(y, self.training)    # (N, D)
+        y = self.y_embedder(y)#, self.training)    # (N, D)
         c = t + y                                # (N, D)
         for block in self.blocks:
             x = block(x, c)                      # (N, T, D)
@@ -330,7 +348,7 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #################################################################################
 
 def DiT_XL_2(**kwargs):
-    return DiT(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
+    return DiT(depth=28, hidden_size=1152, patch_size=(1, 5), num_heads=16, **kwargs)
 
 def DiT_XL_4(**kwargs):
     return DiT(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)

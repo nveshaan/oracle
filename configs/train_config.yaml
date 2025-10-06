@@ -1,0 +1,19 @@
+defaults:
+  - override hydra/job_logging: disabled
+  
+results_dir: "results"
+
+model: "DiT-XL/2"   # choices: [list(DiT_models.keys())]
+
+epochs: 1400
+batch_size: 256
+seed: 0
+num_workers: 4
+
+log_every: 100
+ckpt_every: 50000
+
+wandb:
+  project: "oracle"
+  name: "yfinance"
+  log: True

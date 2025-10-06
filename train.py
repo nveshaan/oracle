@@ -16,8 +16,12 @@ from collections import OrderedDict
 from copy import deepcopy
 from glob import glob
 from time import time
-import argparse
 import os
+import random
+from tqdm import tqdm
+import hydra
+import wandb
+from omegaconf import DictConfig, OmegaConf
 
 from models import DiT_models
 from diffusion import create_diffusion
@@ -52,25 +56,32 @@ def requires_grad(model, flag=True):
 #                                  Training Loop                                #
 #################################################################################
 
-def main(args):
+@hydra.main(config_path="configs", config_name="train_config", version_base="1.3")
+def main(cfg: DictConfig):
     """
     Trains a new DiT model.
     """
     device = 'mps'
-    seed = args.seed
+    random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+
+    if cfg.wandb.log:
+        wandb.init(project=cfg.wandb.project, name=cfg.wandb.name, config=OmegaConf.to_container(cfg))
+
     # Setup an experiment folder:
-    os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
-    experiment_index = len(glob(f"{args.results_dir}/*"))
-    model_string_name = args.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
-    experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
+    os.makedirs(cfg.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
+    experiment_index = len(glob(f"{cfg.results_dir}/*"))
+    model_string_name = cfg.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
+    experiment_dir = f"{cfg.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
     checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
     os.makedirs(checkpoint_dir, exist_ok=True)
     print(f"Experiment directory created at {experiment_dir}")
 
     # Create model:
-    latent_size = (30, 5)
-    model = DiT_models[args.model](
-        input_size=latent_size,
+    trendline_size = (30, 5)
+    model = DiT_models[cfg.model](
+        input_size=trendline_size,
     )
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
@@ -82,21 +93,14 @@ def main(args):
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
 
-    # Setup data:
-    # transform = transforms.Compose([
-    #     transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, args.image_size)),
-    #     transforms.RandomHorizontalFlip(),
-    #     transforms.ToTensor(),
-    #     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
-    # ])
     dataset = yf_Trendlines()
     loader = DataLoader(
         dataset,
-        batch_size=int(args.batch_size),
+        batch_size=int(cfg.batch_size),
         shuffle=True,
-        num_workers=args.num_workers,
+        num_workers=cfg.num_workers,
     )
-    print(f"Dataset contains {len(dataset):,} images ({args.data_path})")
+    print(f"Dataset contains {len(dataset):,} trendlines ({cfg.data_path})")
 
     # Prepare models for training:
     update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
@@ -109,10 +113,11 @@ def main(args):
     running_loss = 0
     start_time = time()
 
-    print(f"Training for {args.epochs} epochs...")
-    for epoch in range(args.epochs):
+    print(f"Training for {cfg.epochs} epochs...")
+    for epoch in range(cfg.epochs):
         print(f"Beginning epoch {epoch}...")
-        for x, y in loader:
+        loop = tqdm(loader, desc=f"Epoch {epoch+1}", leave=False)
+        for x, y in enumerate(loop):
             x = x.to(device)
             y = y.to(device)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
@@ -125,49 +130,58 @@ def main(args):
             update_ema(ema, model.module)
 
             # Log loss values:
+            loop.set_postfix(loss=loss.item())
             running_loss += loss.item()
             log_steps += 1
             train_steps += 1
-            if train_steps % args.log_every == 0:
+            if train_steps % cfg.log_every == 0:
                 # Measure training speed:
-                torch.cuda.synchronize()
                 end_time = time()
                 steps_per_sec = log_steps / (end_time - start_time)
                 # Reduce loss history over all processes:
                 avg_loss = torch.tensor(running_loss / log_steps, device=device)
                 avg_loss = avg_loss.item()
-                print(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                if cfg.wandb.log:
+                    wandb.log({
+                        "step": train_steps,
+                        "train loss": avg_loss,
+                        "train steps/sec": steps_per_sec
+                    })
                 # Reset monitoring variables:
                 running_loss = 0
                 log_steps = 0
                 start_time = time()
 
             # Save DiT checkpoint:
-            if train_steps % args.ckpt_every == 0 and train_steps > 0:
+            if train_steps % cfg.ckpt_every == 0 and train_steps > 0:
                 checkpoint = {
                     "model": model.module.state_dict(),
                     "ema": ema.state_dict(),
                     "opt": opt.state_dict(),
-                    "args": args
+                    "cfg": cfg
                 }
                 checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                 torch.save(checkpoint, checkpoint_path)
-                print(f"Saved checkpoint to {checkpoint_path}")
 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
-
+    if cfg.wandb.log:
+        wandb.finish()
 
 if __name__ == "__main__":
-    # Default args here will train DiT-XL/2 with the hyperparameters we used in our paper (except training iters).
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--results-dir", type=str, default="results")
-    parser.add_argument("--model", type=str, choices=list(DiT_models.keys()), default="DiT-XL/2")
-    parser.add_argument("--epochs", type=int, default=1400)
-    parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--log-every", type=int, default=100)
-    parser.add_argument("--ckpt-every", type=int, default=50_000)
-    args = parser.parse_args()
-    main(args)
+    print("PyTorch Version:", torch.__version__)
+    if torch.cuda.is_available():
+        print("Using CUDA")
+        print("CUDA Available:", torch.cuda.is_available())
+        print("CUDA Version:", torch.version.cuda)
+        print("cuDNN Version:", torch.backends.cudnn.version())
+        print("Device Count:", torch.cuda.device_count())
+    elif torch.backends.mps.is_available():
+        print("Using MPS")
+        print("MPS Available:", torch.backends.mps.is_available())
+        print("MPS Built:", torch.backends.mps.is_built())
+        print("Device Count:", torch.mps.device_count())
+    else:
+        print("Using CPU")
+        print("Device:", torch.cpu.current_device())
+    main()
