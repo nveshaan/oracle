@@ -6,15 +6,15 @@ results_dir: "results"
 
 model: "DiT-L"   # choices: [list(DiT_models.keys())]
 
-epochs: 100
+epochs: 50
 batch_size: 64
 seed: 42
 num_workers: 4
 
-log_every: 100
-ckpt_every: 5000
+log_every: 500
+ckpt_every: 500
 
 wandb:
   project: "oracle"
-  name: "yfinance-L"
+  name: "yfinance-L-x_start"
   log: True
