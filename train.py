@@ -22,6 +22,7 @@ from tqdm import tqdm
 import hydra
 import wandb
 from omegaconf import DictConfig, OmegaConf
+import datetime
 
 from models import DiT_models
 from diffusion import create_diffusion
@@ -154,12 +155,10 @@ def main(cfg: DictConfig):
                 start_time = time()
 
             # Save DiT checkpoint:
-            if train_steps % cfg.ckpt_every == 0 and train_steps > 0:
+            if train_steps % cfg.ckpt_every == 0:
                 checkpoint = {
                     "model": model.state_dict(),
                     "ema": ema.state_dict(),
-                    "opt": opt.state_dict(),
-                    "cfg": cfg
                 }
                 checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                 torch.save(checkpoint, checkpoint_path)
@@ -168,6 +167,10 @@ def main(cfg: DictConfig):
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
     if cfg.wandb.log:
         wandb.finish()
+
+    os.makedirs(os.path.dirname(f'checkpoints/{datetime.datetime.now().strftime("%m%d_%H%M")}_model.pth'), exist_ok=True)
+    torch.save(model.state_dict(), f'checkpoints/{datetime.datetime.now().strftime("%m%d_%H%M")}_model.pth')
+    print(f"\nModel saved successfully.")
 
 if __name__ == "__main__":
     print("PyTorch Version:", torch.__version__)

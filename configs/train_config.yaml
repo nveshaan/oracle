@@ -4,17 +4,17 @@ defaults:
 data_path: "data"
 results_dir: "results"
 
-model: "DiT-B"   # choices: [list(DiT_models.keys())]
+model: "DiT-L"   # choices: [list(DiT_models.keys())]
 
-epochs: 1400
-batch_size: 256
-seed: 0
+epochs: 100
+batch_size: 64
+seed: 42
 num_workers: 4
 
 log_every: 100
-ckpt_every: 50000
+ckpt_every: 5000
 
 wandb:
   project: "oracle"
-  name: "yfinance"
+  name: "yfinance-L"
   log: True

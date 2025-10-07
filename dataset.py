@@ -35,13 +35,11 @@ class yf_Trendlines(Dataset):
         week = self.hr[week_id-self.week_index]
         mon = self.day[mon_id-self.mon_index]
 
-        # Normalize to baseline and force float32
         base_fhr = np.float32(fhr[0, 4])
         base_phr = np.float32(phr[0, 4])
         base_week = np.float32(week[0, 4])
         base_mon = np.float32(mon[0, 4])
 
-        # Build tensors (seq_len, features)
         fhr_tensor  = torch.tensor(fhr[:, 1:].astype(np.float32))  - base_fhr
         phr_tensor  = torch.tensor(phr[:, 1:].astype(np.float32))  - base_phr
         day_np = day.astype(np.float32)
@@ -53,7 +51,6 @@ class yf_Trendlines(Dataset):
         # fhr as (1, 5, T) image-like tensor (features vertically, time horizontally)
         fhr_tensor = fhr_tensor.T.unsqueeze(0)  # (1, 5, T)
 
-        # Build condition tensor: stack modalities vertically => H = 4 * 5 = 20, W = T
         cond_rows = [phr_tensor.T, day_tensor.T, week_tensor.T, mon_tensor.T]  # each (5, T)
         condition = torch.cat(cond_rows, dim=0).unsqueeze(0)  # (1,20,T)
 
