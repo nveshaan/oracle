@@ -66,25 +66,91 @@ class TimestepEmbedder(nn.Module):
 
 class TrendlineEmbedder(nn.Module):
     """
-    Embeds different trendlines into one single vector.
+    Flexible embedder for stacked trendlines (shape: N, 1, 20, T).
+    Pipeline:
+      1. Reshape to (N, 20, T)
+      2. Multi-scale temporal depthwise separable CNN
+      3. Row (series) mixing
+      4. (Optional) temporal Transformer
+      5. Global pooling (mean + max) -> projection
     """
-    def __init__(self, hidden_size, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.embedder = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=(5, 1), stride=(5, 1)),
-            nn.Tanh(),
-            nn.Conv2d(16, 32, kernel_size=(1, 5), padding=(0, 2)),
-            nn.Tanh(),
-            nn.Conv2d(32, 64, kernel_size=(4, 1)),
-            nn.Tanh(),
-            nn.Flatten(),
-            nn.Linear(1920, hidden_size),
-            nn.Tanh(),
+    def __init__(self, hidden_size, d_model=256, use_transformer=True, n_heads=4, n_layers=2, dropout=0.1):
+        super().__init__()
+        in_channels = 20  # 4 groups * 5 rows each
+
+        # Multi-scale temporal conv branches
+        def dw_pw(kernel, dilation=1):
+            padding = (kernel // 2) * dilation
+            return nn.Sequential(
+                nn.Conv1d(in_channels, in_channels, kernel, padding=padding, dilation=dilation, groups=in_channels),
+                nn.GELU(),
+                nn.Conv1d(in_channels, d_model, 1),
+                nn.GELU()
+            )
+
+        self.branch_small = dw_pw(3)
+        self.branch_mid   = dw_pw(5)
+        self.branch_dil   = dw_pw(3, dilation=2)
+
+        self.mix = nn.Sequential(
+            nn.Conv1d(3 * d_model, d_model, 1),
+            nn.GELU(),
+            nn.Conv1d(d_model, d_model, 1),
         )
-    
+
+        self.use_transformer = use_transformer
+        if use_transformer:
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=n_heads,
+                dim_feedforward=4 * d_model,
+                dropout=dropout,
+                batch_first=True,
+                activation="gelu",
+                norm_first=True,
+            )
+            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+            self.pos_proj = nn.Parameter(torch.randn(1, 512, d_model) * 0.02)  # max T clip (extend if needed)
+
+        self.proj = nn.Sequential(
+            nn.Linear(2 * d_model, hidden_size),
+            nn.GELU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.Tanh()
+        )
+
     def forward(self, y):
-        y_emb = self.embedder(y)
-        return y_emb
+        # y: (N, 1, 20, T) -> (N, 20, T)
+        y = y.squeeze(1)
+
+        b1 = self.branch_small(y)
+        b2 = self.branch_mid(y)
+        b3 = self.branch_dil(y)
+        x = torch.cat([b1, b2, b3], dim=1)  # (N, 3*d_model, T)
+        x = self.mix(x)                     # (N, d_model, T)
+
+        if self.use_transformer:
+            N, C, T = x.shape
+            t_clip = min(T, self.pos_proj.shape[1])
+            if T > t_clip:
+                # interpolate positional encoding if needed
+                pos = torch.nn.functional.interpolate(
+                    self.pos_proj[:, :t_clip].permute(0,2,1),
+                    size=T,
+                    mode="linear",
+                    align_corners=False
+                ).permute(0,2,1)
+            else:
+                pos = self.pos_proj[:, :T]
+            xt = x.permute(0, 2, 1) + pos  # (N, T, C)
+            xt = self.transformer(xt)      # (N, T, C)
+            x = xt.permute(0, 2, 1)
+
+        # Global pooling
+        mean_pool = x.mean(dim=-1)
+        max_pool  = x.amax(dim=-1)
+        feat = torch.cat([mean_pool, max_pool], dim=-1)
+        return self.proj(feat)
 
 
 # class LabelEmbedder(nn.Module):
@@ -220,11 +286,21 @@ class DiT(nn.Module):
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.x_embedder.proj.bias, 0)
 
-        # Initialize trendline embedder params:
-        nn.init.normal_(self.y_embedder.embedder[0].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.embedder[2].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.embedder[4].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.embedder[7].weight, std=0.02)
+        # Initialize trendline embedder params (updated for TrendlineEmbedder)
+        if isinstance(self.y_embedder, TrendlineEmbedder):
+            for m in self.y_embedder.modules():
+                if isinstance(m, nn.Conv1d):
+                    # Use ReLU gain for GELU layers (common practical choice)
+                    nn.init.kaiming_normal_(m.weight, nonlinearity='tanh')
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+                elif isinstance(m, nn.Linear):
+                    nn.init.xavier_uniform_(m.weight)
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+            if getattr(self.y_embedder, "use_transformer", False) and hasattr(self.y_embedder, "pos_proj"):
+                nn.init.normal_(self.y_embedder.pos_proj, std=0.02)
+        # else: (keep old block if you reintroduce LabelEmbedder)
 
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -261,7 +337,7 @@ class DiT(nn.Module):
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
         y = self.y_embedder(y)#, self.training)    # (N, D)
-        c = t# + y                                # (N, D)
+        c = t + y                                # (N, D)
         for block in self.blocks:
             x = block(x, c)                      # (N, T, D)
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)

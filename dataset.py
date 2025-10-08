@@ -40,13 +40,13 @@ class yf_Trendlines(Dataset):
         base_week = np.float32(week[0, 4])
         base_mon = np.float32(mon[0, 4])
 
-        fhr_tensor  = torch.tensor(fhr[:, 1:].astype(np.float32))  - base_fhr
-        phr_tensor  = torch.tensor(phr[:, 1:].astype(np.float32))  - base_phr
+        fhr_tensor  = torch.tensor(self.tanh(fhr[:, 1:].astype(np.float32)  - base_fhr))
+        phr_tensor  = torch.tensor(self.tanh(phr[:, 1:].astype(np.float32)  - base_phr))
         day_np = day.astype(np.float32)
         base_day = np.float32(day_np[0, 4])
-        day_tensor  = torch.from_numpy(day_np) - base_day  # shape (N_hr, 5)
-        week_tensor = torch.tensor(week[:,1:].astype(np.float32)) - base_week
-        mon_tensor  = torch.tensor(mon[:,1:].astype(np.float32))  - base_mon
+        day_tensor  = torch.from_numpy(self.tanh(day_np) - base_day)  # shape (N_hr, 5)
+        week_tensor = torch.tensor(self.tanh(week[:,1:].astype(np.float32) - base_week))
+        mon_tensor  = torch.tensor(self.tanh(mon[:,1:].astype(np.float32)  - base_mon))
 
         # fhr as (1, 5, T) image-like tensor (features vertically, time horizontally)
         fhr_tensor = fhr_tensor.T.unsqueeze(0)  # (1, 5, T)
@@ -61,7 +61,9 @@ class yf_Trendlines(Dataset):
             [series[i+5, 1], max(series[i:i+6, 2]), min(series[i:i+6, 3]), series[i, 4], sum(series[i:i+6, 5])]
             for i in range(0, len(series)-5, 6)
         ])
-        
+    
+    def tanh(self, x):
+        return np.tanh(x*0.01)
 
 if __name__ == '__main__':
     ds = yf_Trendlines()
