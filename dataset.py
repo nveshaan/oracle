@@ -69,7 +69,7 @@ class yf_Trendlines(Dataset):
         cond_rows = [phr_tensor.T, day_tensor.T, week_tensor.T, mon_tensor.T]  # each (5, T)
         condition = torch.cat(cond_rows, dim=0).unsqueeze(0)  # (1,20,T)
 
-        return fhr_tensor.float(), condition.float(), torch.tensor(idx, dtype=torch.long)
+        return fhr_tensor.float(), condition.float()
 
     def _min_to_hr(self, series):
         return np.array([
