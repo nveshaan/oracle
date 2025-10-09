@@ -118,12 +118,12 @@ def main(cfg: DictConfig):
     for epoch in range(cfg.epochs):
         loop = tqdm(loader, desc=f"Epoch {epoch+1}", leave=False)
         for batch_idx, batch in enumerate(loop):
-            x, cond = batch
+            x, cond, idx = batch
             x = x.to(device, dtype=torch.float32)
             cond = cond.to(device, dtype=torch.float32)
-            # cond = tuple(c.to(device, dtype=torch.float32) for c in cond)
+            idx = idx.to(device, dtype=torch.long).view(-1)   # ensure (B,) on MPS
             t = torch.randint(0, diffusion.num_timesteps, (x.size(0),), device=device)
-            model_kwargs = dict(y=cond)
+            model_kwargs = dict(y=idx)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
             opt.zero_grad()

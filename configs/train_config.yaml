@@ -11,10 +11,10 @@ batch_size: 64
 seed: 42
 num_workers: 4
 
-log_every: 500
+log_every: 50
 ckpt_every: 5000
 
 wandb:
   project: "oracle"
-  name: "yfinance-L-tanh_normalization_scaled"
+  name: "yfinance-L-postLN"
   log: True

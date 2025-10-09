@@ -87,34 +87,34 @@ class TrendlineEmbedder(nn.Module):
         return y_emb
 
 
-# class LabelEmbedder(nn.Module):
-#     """
-#     Embeds class labels into vector representations. Also handles label dropout for classifier-free guidance.
-#     """
-#     def __init__(self, num_classes, hidden_size, dropout_prob):
-#         super().__init__()
-#         use_cfg_embedding = dropout_prob > 0
-#         self.embedding_table = nn.Embedding(num_classes + use_cfg_embedding, hidden_size)
-#         self.num_classes = num_classes
-#         self.dropout_prob = dropout_prob
+class LabelEmbedder(nn.Module):
+    """
+    Embeds class labels into vector representations. Also handles label dropout for classifier-free guidance.
+    """
+    def __init__(self, num_classes, hidden_size, dropout_prob):
+        super().__init__()
+        use_cfg_embedding = dropout_prob > 0
+        self.embedding_table = nn.Embedding(num_classes + use_cfg_embedding, hidden_size)
+        self.num_classes = num_classes
+        self.dropout_prob = dropout_prob
 
-#     def token_drop(self, labels, force_drop_ids=None):
-#         """
-#         Drops labels to enable classifier-free guidance.
-#         """
-#         if force_drop_ids is None:
-#             drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
-#         else:
-#             drop_ids = force_drop_ids == 1
-#         labels = torch.where(drop_ids, self.num_classes, labels)
-#         return labels
+    def token_drop(self, labels, force_drop_ids=None):
+        """
+        Drops labels to enable classifier-free guidance.
+        """
+        if force_drop_ids is None:
+            drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
+        else:
+            drop_ids = force_drop_ids == 1
+        labels = torch.where(drop_ids, self.num_classes, labels)
+        return labels
 
-#     def forward(self, labels, train, force_drop_ids=None):
-#         use_dropout = self.dropout_prob > 0
-#         if (train and use_dropout) or (force_drop_ids is not None):
-#             labels = self.token_drop(labels, force_drop_ids)
-#         embeddings = self.embedding_table(labels)
-#         return embeddings
+    def forward(self, labels, train, force_drop_ids=None):
+        use_dropout = self.dropout_prob > 0
+        if (train and use_dropout) or (force_drop_ids is not None):
+            labels = self.token_drop(labels, force_drop_ids)
+        embeddings = self.embedding_table(labels)
+        return embeddings
 
 
 #################################################################################
@@ -140,8 +140,8 @@ class DiTBlock(nn.Module):
 
     def forward(self, x, c):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        x = x + gate_msa.unsqueeze(1) * modulate(self.norm1(self.attn(x)), shift_msa, scale_msa)
+        x = x + gate_mlp.unsqueeze(1) * modulate(self.norm2(self.mlp(x)), shift_mlp, scale_mlp)
         return x
 
 
@@ -179,6 +179,8 @@ class DiT(nn.Module):
         num_heads=16,
         mlp_ratio=4.0,
         learn_sigma=True,
+        num_classes=4276,  # 4276 for trendlines
+        class_dropout_prob=0.1,
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -189,8 +191,8 @@ class DiT(nn.Module):
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
-        # self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
-        self.y_embedder = TrendlineEmbedder(hidden_size)
+        self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
+        # self.y_embedder = TrendlineEmbedder(hidden_size)
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
@@ -221,10 +223,12 @@ class DiT(nn.Module):
         nn.init.constant_(self.x_embedder.proj.bias, 0)
 
         # Initialize trendline embedder params:
-        nn.init.normal_(self.y_embedder.embedder[0].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.embedder[2].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.embedder[4].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.embedder[7].weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.embedder[0].weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.embedder[2].weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.embedder[4].weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.embedder[7].weight, std=0.02)
+
+        nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
 
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -260,8 +264,8 @@ class DiT(nn.Module):
         """
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
-        y = self.y_embedder(y)#, self.training)    # (N, D)
-        c = t# + y                                # (N, D)
+        y = self.y_embedder(y, self.training)    # (N, D)
+        c = t + y                                # (N, D)
         for block in self.blocks:
             x = block(x, c)                      # (N, T, D)
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)

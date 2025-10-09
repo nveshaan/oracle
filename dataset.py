@@ -1,17 +1,32 @@
 import numpy as np
 import pandas as pd
 import torch
+import ta
 
 from torch.utils.data import Dataset, DataLoader
 
 class yf_Trendlines(Dataset):
-    def __init__(self, dir='data', fhr=30, phr=30, day=30, wek = 30, mon=30):
+    def __init__(self, dir='data', fhr=30, phr=30, day=30, wek = 30, mon=30, window=10):
         super().__init__()
         min1 = pd.read_csv('data/8,15 8,29 2min.csv', header=2)
         min2 = pd.read_csv('data/9,2 9,29 2min.csv', header=2)
-        self.min = pd.concat((min1, min2)).to_numpy()
-        self.hr = pd.read_csv('data/8,4 9,29 1hr.csv', header=2).to_numpy()
-        self.day = pd.read_csv('data/7,2 9,29 1day.csv', header=2).to_numpy()
+        self.min = pd.concat((min1, min2))
+        self.hr = pd.read_csv('data/8,4 9,29 1hr.csv', header=2)
+        self.day = pd.read_csv('data/7,2 9,29 1day.csv', header=2)
+
+        def transform(df):
+            numeric_cols = df.columns[1:6]
+            for col in numeric_cols:
+                df[col] = ta.trend.ema_indicator(df[col], window=window)
+            return df
+
+        self.min = transform(self.min)
+        self.hr = transform(self.hr)
+        self.day = transform(self.day)
+
+        self.min = self.min.dropna().to_numpy()
+        self.hr = self.hr.dropna().to_numpy()
+        self.day = self.day.dropna().to_numpy()
 
         self.fhr_index = [[i+j for j in range(fhr)] for i in range(6*day+phr, len(self.min)-fhr)]
         self.phr_index = [[i+j for j in range(phr)] for i in range(6*day, len(self.min)-fhr-phr)]
@@ -54,7 +69,7 @@ class yf_Trendlines(Dataset):
         cond_rows = [phr_tensor.T, day_tensor.T, week_tensor.T, mon_tensor.T]  # each (5, T)
         condition = torch.cat(cond_rows, dim=0).unsqueeze(0)  # (1,20,T)
 
-        return fhr_tensor.float(), condition.float()
+        return fhr_tensor.float(), condition.float(), torch.tensor(idx, dtype=torch.long)
 
     def _min_to_hr(self, series):
         return np.array([
