@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 
 
-class GaussianDiffusion():
+class GaussianDiffusion:
     def __init__(self, timesteps=300):
         # Define beta schedule
         self.T = timesteps

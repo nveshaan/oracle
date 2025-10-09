@@ -54,14 +54,12 @@ class TrendlineEmbedder(nn.Module):
     def __init__(self, hidden_size, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.embedder = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=(5, 1), stride=(5, 1)),
+            nn.Conv2d(1, 32, kernel_size=(1, 4), padding=(0, 2)),
             nn.Tanh(),
-            nn.Conv2d(16, 32, kernel_size=(1, 5), padding=(0, 2)),
-            nn.Tanh(),
-            nn.Conv2d(32, 64, kernel_size=(4, 1)),
+            nn.Conv2d(32, 128, kernel_size=(4, 1)),
             nn.Tanh(),
             nn.Flatten(),
-            nn.Linear(1920, hidden_size),
+            nn.Linear(3840, hidden_size),
             nn.Tanh(),
         )
     
@@ -70,6 +68,42 @@ class TrendlineEmbedder(nn.Module):
         return y_emb
     
 
-class UNet(nn.Module):
-    def __init__(self, *args, **kwargs):
+class UNetBlock(nn.Module):
+    def __init__(self, input_dim, output_dim, hidden_size, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.linear = nn.Linear(input_dim, output_dim)
+        self.norm_final = nn.LayerNorm(output_dim, elementwise_affine=False, eps=1e-6)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 2*output_dim, bias=True)
+        )
+
+    def forward(self, x, c):
+        shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
+        x = self.linear(x)
+        x = modulate(self.norm_final(x), shift, scale)
+        return x
+    
+
+class UNet(nn.Module):
+    def __init__(self, nodes, hidden_size, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.nodes = nodes
+        self.hidden_size = hidden_size
+
+        self.t_embedder = TimestepEmbedder(hidden_size)
+        self.y_embedder = TrendlineEmbedder(hidden_size)
+
+        self.blocks = nn.ModuleList([
+            UNetBlock(nodes[i], nodes[i+1], hidden_size) for i in range(len(nodes)-1)
+        ])
+
+    def forward(self, x, t, y):
+        t = self.t_embedder(t)
+        y = self.y_embedder(y)
+        c = t + y
+
+        for block in self.blocks:
+            x = block(x, c)
+
+        return x
