@@ -3,7 +3,7 @@ import os
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from model.network import UNet
-from model.diffusion import GaussianDiffusion
+from diffusion import create_diffusion
 from dataset import yf_Trendlines
 
 import torch
@@ -34,11 +34,11 @@ def train_epoch(loader, network, diffusion, loss_fn, optimizer, timesteps, devic
         x, y = batch
         x = x.to(device)
         y = y.to(device)
-        t = torch.randint(0, timesteps, (len(x),), device=device).long()
+        t = torch.randint(0, diffusion.num_timesteps, (len(x),), device=device).long()
 
-        x_noisy, noise = diffusion.forward_diffusion_sample(x, t, device)
-        noise_pred = network(x_noisy, t, y)
-        loss = loss_fn(noise_pred, noise)
+        model_kwargs = dict(y=y)
+        loss_dict = diffusion.training_losses(network, x, t, model_kwargs)
+        loss = loss_dict["loss"].mean()
 
         optimizer.zero_grad()
         loss.backward()
@@ -62,11 +62,11 @@ def validate_epoch(loader, network, diffusion, loss_fn, timesteps, device, epoch
             x, y = batch
             x = x.to(device)
             y = y.to(device)
-            t = torch.randint(0, timesteps, (len(x),), device=device).long()
+            t = torch.randint(0, diffusion.num_timesteps, (len(x),), device=device)
 
-            x_noisy, noise = diffusion.forward_diffusion_sample(x, t, device)
-            noise_pred = network(x_noisy, t, y)
-            loss = loss_fn(noise_pred, noise)
+            model_kwargs = dict(y=y)
+            loss_dict = diffusion.training_losses(network, x, t, model_kwargs)
+            loss = loss_dict["loss"].mean()
 
             total_loss += loss.item()
             loop.set_postfix(loss=loss.item())
@@ -98,7 +98,7 @@ def main(cfg: DictConfig):
         model = torch.compile(model)
 
     timesteps = cfg.model.timesteps
-    diffusion = GaussianDiffusion(timesteps=timesteps)
+    diffusion = create_diffusion(timestep_respacing="")
 
     loss_fn = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=cfg.train.lr)
@@ -109,9 +109,9 @@ def main(cfg: DictConfig):
     for epoch in range(cfg.train.epochs):
         print(f"\n Epoch {epoch+1}/{cfg.train.epochs}")
         train_loss = train_epoch(train_loader, model, diffusion, loss_fn, optimizer, timesteps, device, epoch, cfg.wandb.log)
-        val_loss = validate_epoch(val_loader, model, diffusion, loss_fn, timesteps, device, epoch)
+        #val_loss = validate_epoch(val_loader, model, diffusion, loss_fn, timesteps, device, epoch)
 
-        print(f" Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
+        print(f" Train Loss: {train_loss:.6f} ")#| Val Loss: {val_loss:.6f}")
 
         if cfg.train.epoch_save:
             os.makedirs(os.path.dirname(f'checkpoints/{datetime.datetime.now().strftime("%m%d_%H%M")}_epoch{epoch+1}.pth'), exist_ok=True)
@@ -122,7 +122,7 @@ def main(cfg: DictConfig):
             wandb.log({
                 "epoch": epoch + 1,
                 "train/avg_loss": train_loss,
-                "val/avg_loss": val_loss
+                #"val/avg_loss": val_loss
             })
 
     print("Training complete.")

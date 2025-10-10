@@ -4,7 +4,7 @@ import numpy as np
 import math
 
 def modulate(x, shift, scale):
-    return x * scale + shift
+    return x * (1 + scale) + shift
 
 
 class TimestepEmbedder(nn.Module):
@@ -56,7 +56,7 @@ class TrendlineEmbedder(nn.Module):
         self.embedder = nn.Sequential(
             nn.Conv2d(input_channels, 32, kernel_size=(1, 5), padding=(0, 2)),
             nn.Tanh(),
-            nn.Conv2d(32, 128, kernel_size=(4, 1)),
+            nn.Conv2d(32, 128, kernel_size=(1, 1)),
             nn.Tanh(),
             nn.Flatten(),
             nn.Linear(3840, hidden_size),

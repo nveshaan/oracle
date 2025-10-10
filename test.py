@@ -1,7 +1,7 @@
 import torch
 from torch.utils.data import DataLoader
 from dataset import yf_Trendlines
-from model.diffusion import GaussianDiffusion
+from diffusion import create_diffusion
 from model.network import UNet
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,22 +10,22 @@ from tqdm import tqdm
 
 # ------------------ Setup ------------------
 device = 'mps' if torch.backends.mps.is_available() else 'cpu'
-num_samples = 100
-# seed = 42
-# random.seed(seed)
-# np.random.seed(seed)
-# torch.manual_seed(seed)
-# torch.set_grad_enabled(False)
+num_samples = 20
+seed = 1000
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.set_grad_enabled(False)
 
 # Load model
-model = UNet([181, 1024, 512, 256, 128, 64, 128, 256, 512, 1024, 181]).to(device)
-ckpt_path = "checkpoints/1010_1038_model.pth"
+model = UNet([181, 1024, 512, 256, 128, 64, 128, 256, 512, 1024, 362]).to(device)
+ckpt_path = "checkpoints/1010_1148_model.pth"
 state = torch.load(ckpt_path, map_location=device)
 if isinstance(state, dict) and 'model' in state:
     state = state['model']
 model.load_state_dict(state, strict=False)
 model.eval()
-diffusion = GaussianDiffusion(1000)
+diffusion = create_diffusion(timestep_respacing="")
 
 # Dataset / single batch
 dataset = yf_Trendlines()
@@ -38,14 +38,15 @@ y = y.to(device, dtype=torch.float32)
 
 # --------------- Full reverse diffusion sampling (prediction) ---------------
 with torch.no_grad():
-    x_t = x.clone()
-    loop = tqdm(range(diffusion.T-1, -1, -1), total=diffusion.T, desc='Sampling')
-    for i in loop:
-        t = torch.full((num_samples,), i, device=device, dtype=torch.long)
-        x_t = diffusion.sample_timestep(model, x_t, t, y)
-        if i % 100 == 0 or i == diffusion.T - 1:
-            loop.set_postfix(timestep=i)
-    sample = x_t
+    sample = diffusion.p_sample_loop(
+        model,  # model callable
+        x.shape,  # target shape
+        torch.randn_like(x),  # initial noise
+        model_kwargs={"y": y},
+        progress=True,
+        device=device,
+        clip_denoised=True,
+    )
 
 x = x.cpu().numpy()
 sample = sample.cpu().numpy()

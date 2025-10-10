@@ -10,11 +10,11 @@ data:
   num_workers: 4
 
 model:
-  nodes: [181, 1024, 512, 256, 128, 64, 128, 256, 512, 1024, 181]
+  nodes: [181, 1024, 512, 256, 128, 64, 128, 256, 512, 1024, 362]
   timesteps: 1000
 
 train:
-  epochs: 10
+  epochs: 30
   lr: 0.001
   use_compile: False
   save: True

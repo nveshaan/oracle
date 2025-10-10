@@ -75,7 +75,7 @@ class yf_Trendlines(Dataset):
         temp = np.array(temp)
         fhr_tensor = torch.cat([torch.tensor(temp, dtype=torch.float32).reshape((2*self.order)*len(fhr_tensor)), torch.tensor([1], dtype=torch.float32)], dim=0)
 
-        cond_rows = torch.tensor(np.array([phr_tensor, day_tensor, week_tensor, mon_tensor]))
+        cond_rows = torch.tensor(np.array([phr_tensor]))
         temp = [torch.ones_like(cond_rows)]
         for i in range(self.order):
             temp.append(sin(cond_rows*(i+1)))
