@@ -5,15 +5,13 @@ import seaborn as sns
 
 from sklearn.neighbors import NearestNeighbors
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+from sklearn.manifold import TSNE
 
-window = 10
-step = 5
+window = 30
+step = 30
 
 n_neighbors = 100
-idx = 100
-
-scaler = StandardScaler()
+idx = 10
 
 min1 = pd.read_csv('data/8,15 8,29 2min.csv', header=2)
 min2 = pd.read_csv('data/9,2 9,29 2min.csv', header=2)
@@ -49,5 +47,11 @@ k_fhr = fhr_norm[indices[0]]
 pca = PCA(n_components=1)
 k_pca = pca.fit_transform(k_fhr)
 
-sns.histplot(k_pca, bins=10, kde=True)
+tsne = TSNE(n_components=1)
+k_sne = tsne.fit_transform(k_fhr)
+
+plt.subplot(121)
+sns.histplot(k_pca, legend='PCA', bins=10, kde=True)
+plt.subplot(122)
+sns.histplot(k_sne, legend='t-sne', bins=10, kde=True)
 plt.show()
