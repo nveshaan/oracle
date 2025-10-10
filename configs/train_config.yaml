@@ -1,20 +1,26 @@
+# config/config.yaml
+
 defaults:
-  - override hydra/job_logging: disabled
-  
-data_path: "data"
-results_dir: "results"
+  - override hydra/job_logging: disabled  # Optional: disable hydra logs
 
-model: "DiT-L"   # choices: [list(DiT_models.keys())]
-
-epochs: 10
-batch_size: 64
 seed: 42
-num_workers: 4
+data:
+  val_ratio: 0.2
+  batch_size: 256
+  num_workers: 4
 
-log_every: 50
-ckpt_every: 5000
+model:
+  nodes: [181, 1024, 512, 256, 128, 64, 128, 256, 512, 1024, 181]
+  timesteps: 1000
+
+train:
+  epochs: 10
+  lr: 0.001
+  use_compile: False
+  save: True
+  epoch_save: False
 
 wandb:
   project: "oracle"
-  name: "yfinance-L-postLN"
-  log: True
+  name: "vanilla-fourier"
+  log: False

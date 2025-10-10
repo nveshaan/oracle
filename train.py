@@ -1,176 +1,140 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-
-"""
-A minimal training script for DiT using PyTorch DDP.
-"""
-import torch
-from torch.utils.data import DataLoader
-from dataset import yf_Trendlines
-from torchvision import transforms
-import numpy as np
-from collections import OrderedDict
-from copy import deepcopy
-from glob import glob
-from time import time
+import sys
 import os
-import random
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from model.network import UNet
+from model.diffusion import GaussianDiffusion
+from dataset import yf_Trendlines
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, random_split
+
+import numpy as np
 from tqdm import tqdm
+from omegaconf import DictConfig, OmegaConf
 import hydra
 import wandb
-from omegaconf import DictConfig, OmegaConf
+import random
 import datetime
 
-from models import DiT_models
-from diffusion import create_diffusion
 
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
-#################################################################################
-#                             Training Helper Functions                         #
-#################################################################################
+def train_epoch(loader, network, diffusion, loss_fn, optimizer, timesteps, device, epoch, log_to_wandb):
+    network.train()
+    total_loss = 0.0
 
-@torch.no_grad()
-def update_ema(ema_model, model, decay=0.9999):
-    """
-    Step the EMA model towards the current model.
-    """
-    ema_params = OrderedDict(ema_model.named_parameters())
-    model_params = OrderedDict(model.named_parameters())
+    loop = tqdm(loader, desc=f"Epoch {epoch+1} [Train]", leave=False)
+    for batch_idx, batch in enumerate(loop):
+        x, y = batch
+        x = x.to(device)
+        y = y.to(device)
+        t = torch.randint(0, timesteps, (len(x),), device=device).long()
 
-    for name, param in model_params.items():
-        # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
-        ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
+        x_noisy, noise = diffusion.forward_diffusion_sample(x, t, device)
+        noise_pred = network(x_noisy, t, y)
+        loss = loss_fn(noise_pred, noise)
 
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-def requires_grad(model, flag=True):
-    """
-    Set requires_grad flag for all parameters in a model.
-    """
-    for p in model.parameters():
-        p.requires_grad = flag
+        total_loss += loss.item()
+        loop.set_postfix(loss=loss.item())
 
+        if log_to_wandb:
+            wandb.log({"train/loss": loss.item()}, step=epoch * len(loader) + batch_idx)
 
-#################################################################################
-#                                  Training Loop                                #
-#################################################################################
+    return total_loss / len(loader)
+
+def validate_epoch(loader, network, diffusion, loss_fn, timesteps, device, epoch):
+    network.eval()
+    total_loss = 0.0
+
+    with torch.inference_mode():
+        loop = tqdm(loader, desc=f"Epoch {epoch+1} [Val]", leave=False)
+        for batch_idx, batch in enumerate(loop):
+            x, y = batch
+            x = x.to(device)
+            y = y.to(device)
+            t = torch.randint(0, timesteps, (len(x),), device=device).long()
+
+            x_noisy, noise = diffusion.forward_diffusion_sample(x, t, device)
+            noise_pred = network(x_noisy, t, y)
+            loss = loss_fn(noise_pred, noise)
+
+            total_loss += loss.item()
+            loop.set_postfix(loss=loss.item())
+
+    return total_loss / len(loader)
 
 @hydra.main(config_path="configs", config_name="train_config", version_base="1.3")
 def main(cfg: DictConfig):
-    """
-    Trains a new DiT model.
-    """
-    device = 'mps'
-    random.seed(cfg.seed)
-    np.random.seed(cfg.seed)
-    torch.manual_seed(cfg.seed)
+    set_seed(cfg.seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 
     if cfg.wandb.log:
         wandb.init(project=cfg.wandb.project, name=cfg.wandb.name, config=OmegaConf.to_container(cfg))
 
-    # Setup an experiment folder:
-    os.makedirs(cfg.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
-    experiment_index = len(glob(f"{cfg.results_dir}/*"))
-    model_string_name = cfg.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
-    experiment_dir = f"{cfg.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
-    checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    print(f"Experiment directory created at {experiment_dir}")
-
-    # Create model:
-    trendline_size = (5, 30)
-    model = DiT_models[cfg.model](
-        input_size=trendline_size,
-    )
-    # Note that parameter initialization is done within the DiT constructor
-    ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
-    requires_grad(ema, False)
-    model = model.to(device)
-    diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
-    print(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
-
-    # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
-
     dataset = yf_Trendlines()
-    loader = DataLoader(
-        dataset,
-        batch_size=int(cfg.batch_size),
-        shuffle=True,
-        num_workers=cfg.num_workers,
-    )
-    print(f"Dataset contains {len(dataset):,} trendlines ({cfg.data_path})")
 
-    # Prepare models for training:
-    update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
-    model.train()  # important! This enables embedding dropout for classifier-free guidance
-    ema.eval()  # EMA model should always be in eval mode
+    val_size = int(len(dataset) * cfg.data.val_ratio)
+    train_size = len(dataset) - val_size
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    # Variables for monitoring/logging purposes:
-    train_steps = 0
-    log_steps = 0
-    running_loss = 0
-    start_time = time()
+    train_loader = DataLoader(train_dataset, batch_size=cfg.data.batch_size, shuffle=True,
+                              num_workers=cfg.data.num_workers, pin_memory=False)
+    val_loader = DataLoader(val_dataset, batch_size=cfg.data.batch_size, shuffle=False,
+                            num_workers=cfg.data.num_workers, pin_memory=False)
 
-    print(f"Training for {cfg.epochs} epochs...")
-    for epoch in range(cfg.epochs):
-        loop = tqdm(loader, desc=f"Epoch {epoch+1}", leave=False)
-        for batch_idx, batch in enumerate(loop):
-            x, cond, idx = batch
-            x = x.to(device, dtype=torch.float32)
-            cond = cond.to(device, dtype=torch.float32)
-            idx = idx.to(device, dtype=torch.long).view(-1)   # ensure (B,) on MPS
-            t = torch.randint(0, diffusion.num_timesteps, (x.size(0),), device=device)
-            model_kwargs = dict(y=idx)
-            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-            loss = loss_dict["loss"].mean()
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            update_ema(ema, model)
+    nodes = cfg.model.nodes
+    model = UNet(nodes).to(device)
+    if cfg.train.use_compile:
+        model = torch.compile(model)
 
-            # Log loss values:
-            loop.set_postfix(loss=loss.item())
-            running_loss += loss.item()
-            log_steps += 1
-            train_steps += 1
-            if train_steps % cfg.log_every == 0:
-                # Measure training speed:
-                end_time = time()
-                steps_per_sec = log_steps / (end_time - start_time)
-                # Reduce loss history over all processes:
-                avg_loss = torch.tensor(running_loss / log_steps, device=device)
-                avg_loss = avg_loss.item()
-                if cfg.wandb.log:
-                    wandb.log({
-                        "step": train_steps,
-                        "train loss": avg_loss,
-                        "train steps/sec": steps_per_sec
-                    })
-                # Reset monitoring variables:
-                running_loss = 0
-                log_steps = 0
-                start_time = time()
+    timesteps = cfg.model.timesteps
+    diffusion = GaussianDiffusion(timesteps=timesteps)
 
-            # Save DiT checkpoint:
-            if train_steps % cfg.ckpt_every == 0:
-                checkpoint = {
-                    "model": model.state_dict(),
-                    "ema": ema.state_dict(),
-                }
-                checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
-                torch.save(checkpoint, checkpoint_path)
+    loss_fn = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=cfg.train.lr)
 
-    model.eval()  # important! This disables randomized embedding dropout
-    # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
+    print(f"\nModel Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
+    print(f"Dataset Size: {len(dataset)} | Train Size: {len(train_dataset)} | Val Size: {len(val_dataset)}")
+
+    for epoch in range(cfg.train.epochs):
+        print(f"\n Epoch {epoch+1}/{cfg.train.epochs}")
+        train_loss = train_epoch(train_loader, model, diffusion, loss_fn, optimizer, timesteps, device, epoch, cfg.wandb.log)
+        val_loss = validate_epoch(val_loader, model, diffusion, loss_fn, timesteps, device, epoch)
+
+        print(f" Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
+
+        if cfg.train.epoch_save:
+            os.makedirs(os.path.dirname(f'checkpoints/{datetime.datetime.now().strftime("%m%d_%H%M")}_epoch{epoch+1}.pth'), exist_ok=True)
+            torch.save(model.state_dict(), f'checkpoints/{datetime.datetime.now().strftime("%m%d_%H%M")}_epoch{epoch+1}.pth')
+            print(f"\nCheckpoint saved successfully.")
+
+        if cfg.wandb.log:
+            wandb.log({
+                "epoch": epoch + 1,
+                "train/avg_loss": train_loss,
+                "val/avg_loss": val_loss
+            })
+
+    print("Training complete.")
+
+    if cfg.train.save:
+        os.makedirs(os.path.dirname(f'checkpoints/{datetime.datetime.now().strftime("%m%d_%H%M")}_model.pth'), exist_ok=True)
+        torch.save(model.state_dict(), f'checkpoints/{datetime.datetime.now().strftime("%m%d_%H%M")}_model.pth')
+        print(f"\nModel saved successfully.")
+
     if cfg.wandb.log:
         wandb.finish()
 
-    os.makedirs(os.path.dirname(f'checkpoints/{datetime.datetime.now().strftime("%m%d_%H%M")}_model.pth'), exist_ok=True)
-    torch.save(model.state_dict(), f'checkpoints/{datetime.datetime.now().strftime("%m%d_%H%M")}_model.pth')
-    print(f"\nModel saved successfully.")
 
 if __name__ == "__main__":
     print("PyTorch Version:", torch.__version__)
@@ -188,4 +152,5 @@ if __name__ == "__main__":
     else:
         print("Using CPU")
         print("Device:", torch.cpu.current_device())
+    print("\n")
     main()

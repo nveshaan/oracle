@@ -4,7 +4,7 @@ import numpy as np
 import math
 
 def modulate(x, shift, scale):
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+    return x * scale + shift
 
 
 class TimestepEmbedder(nn.Module):
@@ -51,10 +51,10 @@ class TrendlineEmbedder(nn.Module):
     """
     Embeds different trendlines into one single vector.
     """
-    def __init__(self, hidden_size, *args, **kwargs):
+    def __init__(self, input_channels, hidden_size, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.embedder = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=(1, 4), padding=(0, 2)),
+            nn.Conv2d(input_channels, 32, kernel_size=(1, 5), padding=(0, 2)),
             nn.Tanh(),
             nn.Conv2d(32, 128, kernel_size=(4, 1)),
             nn.Tanh(),
@@ -72,6 +72,7 @@ class UNetBlock(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_size, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.linear = nn.Linear(input_dim, output_dim)
+        self.activation = nn.SiLU()
         self.norm_final = nn.LayerNorm(output_dim, elementwise_affine=False, eps=1e-6)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
@@ -82,17 +83,18 @@ class UNetBlock(nn.Module):
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
         x = self.linear(x)
         x = modulate(self.norm_final(x), shift, scale)
+        x = self.activation(x)
         return x
     
 
 class UNet(nn.Module):
-    def __init__(self, nodes, hidden_size, *args, **kwargs):
+    def __init__(self, nodes, input_channels=7, hidden_size=1024, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.nodes = nodes
         self.hidden_size = hidden_size
 
         self.t_embedder = TimestepEmbedder(hidden_size)
-        self.y_embedder = TrendlineEmbedder(hidden_size)
+        self.y_embedder = TrendlineEmbedder(input_channels, hidden_size)
 
         self.blocks = nn.ModuleList([
             UNetBlock(nodes[i], nodes[i+1], hidden_size) for i in range(len(nodes)-1)

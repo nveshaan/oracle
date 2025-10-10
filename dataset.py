@@ -59,10 +59,10 @@ class yf_Trendlines(Dataset):
         base_mon = np.float32(mon[0, 4])
 
         fhr_tensor  = torch.tensor(self.tanh(fhr[:, 1].astype(np.float32)  - base_fhr))
-        phr_tensor  = torch.tensor(self.tanh(phr[:, 1].astype(np.float32)  - base_phr)).unsqueeze(0)
-        day_tensor  = torch.tensor(self.tanh(day[:, 1].astype(np.float32) - base_day)).unsqueeze(0)
-        week_tensor = torch.tensor(self.tanh(week[:, 1].astype(np.float32) - base_week)).unsqueeze(0)
-        mon_tensor  = torch.tensor(self.tanh(mon[:, 1].astype(np.float32)  - base_mon)).unsqueeze(0)
+        phr_tensor  = torch.tensor(self.tanh(phr[:, 1].astype(np.float32)  - base_phr))
+        day_tensor  = torch.tensor(self.tanh(day[:, 1].astype(np.float32) - base_day))
+        week_tensor = torch.tensor(self.tanh(week[:, 1].astype(np.float32) - base_week))
+        mon_tensor  = torch.tensor(self.tanh(mon[:, 1].astype(np.float32)  - base_mon))
 
         sin = transforms.Lambda(lambda x: torch.sin(x))
         cos = transforms.Lambda(lambda x: torch.cos(x))
@@ -75,8 +75,14 @@ class yf_Trendlines(Dataset):
         temp = np.array(temp)
         fhr_tensor = torch.cat([torch.tensor(temp, dtype=torch.float32).reshape((2*self.order)*len(fhr_tensor)), torch.tensor([1], dtype=torch.float32)], dim=0)
 
-        cond_rows = [phr_tensor, day_tensor, week_tensor, mon_tensor]
-        condition = torch.cat(cond_rows, dim=0).unsqueeze(0)
+        cond_rows = torch.tensor(np.array([phr_tensor, day_tensor, week_tensor, mon_tensor]))
+        temp = [torch.ones_like(cond_rows)]
+        for i in range(self.order):
+            temp.append(sin(cond_rows*(i+1)))
+            temp.append(cos(cond_rows*(i+1)))
+
+        temp = np.array(temp)    
+        condition = torch.cat([torch.tensor(temp, dtype=torch.float32)], dim=0)
 
         return fhr_tensor.float(), condition.float()
 
@@ -87,7 +93,7 @@ class yf_Trendlines(Dataset):
         ])
     
     def tanh(self, x):
-        return np.tanh(x*0.01)
+        return np.tanh(x*0.01)*np.pi
 
 if __name__ == '__main__':
     ds = yf_Trendlines()
