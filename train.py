@@ -80,7 +80,7 @@ def main(cfg: DictConfig):
     print(f"Experiment directory created at {experiment_dir}")
 
     # Create model:
-    trendline_size = (5, 30)
+    trendline_size = (1, 30)
     model = DiT_models[cfg.model](
         input_size=trendline_size,
     )
@@ -118,14 +118,13 @@ def main(cfg: DictConfig):
     for epoch in range(cfg.epochs):
         loop = tqdm(loader, desc=f"Epoch {epoch+1}", leave=False)
         for batch_idx, batch in enumerate(loop):
-            x, cond, idx = batch
+            x, cond = batch
             x = x.to(device, dtype=torch.float32)
             cond = cond.to(device, dtype=torch.float32)
-            idx = idx.to(device, dtype=torch.long).view(-1)   # ensure (B,) on MPS
             t = torch.randint(0, diffusion.num_timesteps, (x.size(0),), device=device)
-            model_kwargs = dict(y=idx)
+            model_kwargs = dict(y=cond)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-            loss = loss_dict["loss"].mean()
+            loss = loss_dict["loss"].mean() + loss_dict["reconstruction_loss"].mean()
             opt.zero_grad()
             loss.backward()
             opt.step()

@@ -16,5 +16,5 @@ ckpt_every: 5000
 
 wandb:
   project: "oracle"
-  name: "yfinance-L-postLN"
+  name: "yfinance-L-auxilliary"
   log: True

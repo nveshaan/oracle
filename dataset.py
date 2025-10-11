@@ -4,9 +4,10 @@ import torch
 import ta
 
 from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
 
 class yf_Trendlines(Dataset):
-    def __init__(self, dir='data', fhr=30, phr=30, day=30, wek = 30, mon=30, window=10):
+    def __init__(self, dir='data', fhr=30, phr=30, day=30, wek = 30, mon=30, window=10, order=3):
         super().__init__()
         min1 = pd.read_csv('data/8,15 8,29 2min.csv', header=2)
         min2 = pd.read_csv('data/9,2 9,29 2min.csv', header=2)
@@ -14,6 +15,7 @@ class yf_Trendlines(Dataset):
         self.hr = pd.read_csv('data/8,4 9,29 1hr.csv', header=2)
         self.day = pd.read_csv('data/7,2 9,29 1day.csv', header=2)
 
+        self.order = order
         def transform(df):
             numeric_cols = df.columns[1:6]
             for col in numeric_cols:
@@ -43,7 +45,7 @@ class yf_Trendlines(Dataset):
         phr = self.min[self.phr_index[idx]]
         day = self._min_to_hr(self.min[self.day_index[idx]])
 
-        date = fhr[0][0].split()[0]
+        date = fhr[0, 0].split()[0]
         week_id = np.where(self.hr[:, 0] <= date)[0][-1]
         mon_id = np.where(self.day[:, 0] <= date)[0][-1]
 
@@ -52,24 +54,37 @@ class yf_Trendlines(Dataset):
 
         base_fhr = np.float32(fhr[0, 4])
         base_phr = np.float32(phr[0, 4])
+        base_day = np.float32(day[0, 4])
         base_week = np.float32(week[0, 4])
         base_mon = np.float32(mon[0, 4])
 
-        fhr_tensor  = torch.tensor(self.tanh(fhr[:, 1:].astype(np.float32)  - base_fhr))
-        phr_tensor  = torch.tensor(self.tanh(phr[:, 1:].astype(np.float32)  - base_phr))
-        day_np = day.astype(np.float32)
-        base_day = np.float32(day_np[0, 4])
-        day_tensor  = torch.from_numpy(self.tanh(day_np) - base_day)  # shape (N_hr, 5)
-        week_tensor = torch.tensor(self.tanh(week[:,1:].astype(np.float32) - base_week))
-        mon_tensor  = torch.tensor(self.tanh(mon[:,1:].astype(np.float32)  - base_mon))
+        fhr_tensor  = torch.tensor(self.tanh(fhr[:, 1].astype(np.float32)  - base_fhr)).unsqueeze(0)
+        phr_tensor  = torch.tensor(self.tanh(phr[:, 1].astype(np.float32)  - base_phr))
+        day_tensor  = torch.tensor(self.tanh(day[:, 1].astype(np.float32) - base_day))
+        week_tensor = torch.tensor(self.tanh(week[:, 1].astype(np.float32) - base_week))
+        mon_tensor  = torch.tensor(self.tanh(mon[:, 1].astype(np.float32)  - base_mon))
 
-        # fhr as (1, 5, T) image-like tensor (features vertically, time horizontally)
-        fhr_tensor = fhr_tensor.T.unsqueeze(0)  # (1, 5, T)
+        sin = transforms.Lambda(lambda x: torch.sin(x))
+        cos = transforms.Lambda(lambda x: torch.cos(x))
 
-        cond_rows = [phr_tensor.T, day_tensor.T, week_tensor.T, mon_tensor.T]  # each (5, T)
-        condition = torch.cat(cond_rows, dim=0).unsqueeze(0)  # (1,20,T)
+        temp = [torch.ones_like(fhr_tensor)]
+        for i in range(self.order):
+            temp.append(sin(fhr_tensor*(i+1)))
+            temp.append(cos(fhr_tensor*(i+1)))
 
-        return fhr_tensor.float(), condition.float(), torch.tensor(idx, dtype=torch.long)
+        temp = np.array(temp)
+        fhr_tensor = torch.cat([torch.tensor(temp, dtype=torch.float32)], dim=0)
+
+        cond_rows = torch.tensor(np.array([phr_tensor, day_tensor, week_tensor, mon_tensor]))
+        temp = [torch.ones_like(cond_rows)]
+        for i in range(self.order):
+            temp.append(sin(cond_rows*(i+1)))
+            temp.append(cos(cond_rows*(i+1)))
+
+        temp = np.array(temp)    
+        condition = torch.cat([torch.tensor(temp, dtype=torch.float32)], dim=0)
+
+        return fhr_tensor.float(), condition.float()
 
     def _min_to_hr(self, series):
         return np.array([
@@ -78,11 +93,11 @@ class yf_Trendlines(Dataset):
         ])
     
     def tanh(self, x):
-        return np.tanh(x*0.01)
+        return np.tanh(x*0.01)*np.pi
 
 if __name__ == '__main__':
     ds = yf_Trendlines()
     dl = DataLoader(ds, batch_size=8, shuffle=True)
     batch = next(iter(dl))
-    print("Batch fhr tensor shape (C,5,T):", batch[0].shape)
-    print("Batch condition tensor shape (C,20,T):", batch[1].shape)
+    print("Batch fhr tensor shape (C,1,T):", batch[0].shape)
+    print("Batch condition tensor shape (C,4,T):", batch[1].shape)
