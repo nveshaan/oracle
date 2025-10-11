@@ -5,10 +5,9 @@ import seaborn as sns
 
 from sklearn.neighbors import NearestNeighbors
 from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
 
 window = 30
-step = 30
+step = 1
 
 n_neighbors = 100
 idx = 10
@@ -42,16 +41,23 @@ knn = NearestNeighbors(n_neighbors=n_neighbors, algorithm='auto').fit(phr_norm)
 anchor = np.array([phr[idx]])
 dist, indices = knn.kneighbors(anchor)
 
+sns.histplot(dist.squeeze(0), bins=10)
+plt.xlabel("Distances")
+plt.show()
+
 k_fhr = fhr_norm[indices[0]]
 
 pca = PCA(n_components=1)
 k_pca = pca.fit_transform(k_fhr)
 
-tsne = TSNE(n_components=1)
-k_sne = tsne.fit_transform(k_fhr)
+sns.histplot(k_pca.squeeze(1), bins=10, kde=True, legend=False)
+plt.xlabel("FHR")
+plt.title("pdf of P( FHR | PHR )")
+plt.tight_layout()
+plt.show()
 
-plt.subplot(121)
-sns.histplot(k_pca, legend='PCA', bins=10, kde=True)
-plt.subplot(122)
-sns.histplot(k_sne, legend='t-sne', bins=10, kde=True)
+plt.scatter(dist.squeeze(0), k_pca.squeeze(1))
+plt.xlabel("Distance")
+plt.ylabel("FHR")
+plt.tight_layout()
 plt.show()
