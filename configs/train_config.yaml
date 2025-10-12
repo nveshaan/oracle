@@ -6,7 +6,7 @@ results_dir: "results"
 
 model: "DiT-L"   # choices: [list(DiT_models.keys())]
 
-epochs: 10
+epochs: 100
 batch_size: 64
 seed: 42
 num_workers: 4

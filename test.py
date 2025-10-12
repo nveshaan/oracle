@@ -29,12 +29,11 @@ diffusion = create_diffusion(timestep_respacing="")  # default schedule
 # Dataset / single batch
 dataset = yf_Trendlines()
 loader = DataLoader(dataset, batch_size=1, shuffle=False)
-x, cond, idx = list(loader)[1]  # x: (B,1,5,30)  cond: (B,1,20,30)
+x, cond = list(loader)[1]  # x: (B,1,5,30)  cond: (B,1,20,30)
 x = x.repeat(num_samples, 1, 1, 1)
 x = x.to(device, dtype=torch.float32)
+cond = cond.repeat(num_samples, 1, 1, 1)
 cond = cond.to(device, dtype=torch.float32)
-idx = idx.repeat(num_samples, 1, 1, 1)
-idx = idx.to(device, dtype=torch.long).view(-1)
 
 # --------------- Full reverse diffusion sampling (prediction) ---------------
 with torch.no_grad():
@@ -43,7 +42,7 @@ with torch.no_grad():
         model,  # model callable
         x.shape,  # target shape
         torch.randn_like(x),  # initial noise
-        model_kwargs={"y": idx},
+        model_kwargs={"y": cond},
         progress=True,
         device=device,
         clip_denoised=True,
