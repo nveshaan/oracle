@@ -7,13 +7,18 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
 class yf_Trendlines(Dataset):
-    def __init__(self, dir='data', fhr=30, phr=30, day=30, wek = 30, mon=30, window=10, order=3):
+    def __init__(self, test=False, fhr=30, phr=30, day=30, wek = 30, mon=30, window=10, order=3):
         super().__init__()
-        min1 = pd.read_csv('data/8,15 8,29 2min.csv', header=2)
-        min2 = pd.read_csv('data/9,2 9,29 2min.csv', header=2)
-        self.min = pd.concat((min1, min2))
-        self.hr = pd.read_csv('data/8,4 9,29 1hr.csv', header=2)
-        self.day = pd.read_csv('data/7,2 9,29 1day.csv', header=2)
+        if test:
+            self.min = pd.read_csv('data/test/10,1 10,11 2min.csv', header=2)
+            self.hr = pd.read_csv('data/test/9,10 10,11 1hr.csv', header=2)
+            self.day = pd.read_csv('data/test/9,1 10,11 1day.csv', header=2)
+        else:
+            min1 = pd.read_csv('data/8,15 8,29 2min.csv', header=2)
+            min2 = pd.read_csv('data/9,2 9,29 2min.csv', header=2)
+            self.min = pd.concat((min1, min2))
+            self.hr = pd.read_csv('data/8,4 9,29 1hr.csv', header=2)
+            self.day = pd.read_csv('data/7,2 9,29 1day.csv', header=2)
 
         self.order = order
         def transform(df):
