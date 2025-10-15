@@ -66,19 +66,28 @@ class TimestepEmbedder(nn.Module):
 
 class TrendlineEmbedder(nn.Module):
     """
-    Embeds different trendlines into one single vector.
+    Embeds different trendlines into one single vector, with dropout for unconditional generation.
     """
-    def __init__(self, hidden_size, input_channels=7, *args, **kwargs):
+    def __init__(self, hidden_size, input_channels=7, dropout_prob=0.1, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.dropout_prob = dropout_prob
+        # Learned null trendline for unconditional (shape should match y's input shape, e.g., [batch, channels, height, width])
+        # Assume y shape is [N, input_channels, H, W] – adjust if different
+        self.null_trendline = nn.Parameter(torch.zeros(1, input_channels, 4, 30))  # Example shape; tune to your y shape
+        
         self.encoder = nn.Sequential(
             nn.Conv2d(input_channels, 32, kernel_size=(1, 5), padding=(0, 2)),
             nn.Tanh(),
+            nn.Dropout(0.1),  # Existing dropout (as per previous suggestion)
             nn.Conv2d(32, 128, kernel_size=(4, 1), padding=(0, 0)),
             nn.Tanh(),
+            nn.Dropout(0.1),
             nn.Flatten(),
             nn.Linear(3840, hidden_size),
             nn.Tanh(),
+            nn.Dropout(0.1),
         )
+        # Decoder unchanged
         self.decoder = nn.Sequential(
             nn.Linear(hidden_size, 3840),
             nn.Tanh(),
@@ -89,40 +98,26 @@ class TrendlineEmbedder(nn.Module):
             nn.Tanh()
         )
     
-    def forward(self, y):
+    def drop_trendline(self, y, force_drop_ids=None):
+        """
+        Drops trendlines to enable unconditional generation, similar to label dropout.
+        """
+        if force_drop_ids is None:
+            drop_ids = torch.rand(y.shape[0], device=y.device) < self.dropout_prob
+        else:
+            drop_ids = force_drop_ids == 1
+        # Broadcast null_trendline to match batch size
+        null_expanded = self.null_trendline.expand(y.shape[0], -1, -1, -1)
+        y = torch.where(drop_ids.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1), null_expanded, y)
+        return y
+    
+    def forward(self, y, train=True, force_drop_ids=None):
+        # Apply dropout for unconditional during training or forced
+        if (train and self.dropout_prob > 0) or (force_drop_ids is not None):
+            y = self.drop_trendline(y, force_drop_ids)
         y_emb = self.encoder(y)
         y_hat = self.decoder(y_emb)
         return y_emb, y_hat
-
-
-class LabelEmbedder(nn.Module):
-    """
-    Embeds class labels into vector representations. Also handles label dropout for classifier-free guidance.
-    """
-    def __init__(self, num_classes, hidden_size, dropout_prob):
-        super().__init__()
-        use_cfg_embedding = dropout_prob > 0
-        self.embedding_table = nn.Embedding(num_classes + use_cfg_embedding, hidden_size)
-        self.num_classes = num_classes
-        self.dropout_prob = dropout_prob
-
-    def token_drop(self, labels, force_drop_ids=None):
-        """
-        Drops labels to enable classifier-free guidance.
-        """
-        if force_drop_ids is None:
-            drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
-        else:
-            drop_ids = force_drop_ids == 1
-        labels = torch.where(drop_ids, self.num_classes, labels)
-        return labels
-
-    def forward(self, labels, train, force_drop_ids=None):
-        use_dropout = self.dropout_prob > 0
-        if (train and use_dropout) or (force_drop_ids is not None):
-            labels = self.token_drop(labels, force_drop_ids)
-        embeddings = self.embedding_table(labels)
-        return embeddings
 
 
 #################################################################################
@@ -229,8 +224,8 @@ class DiT(nn.Module):
 
         # Initialize trendline embedder params:
         nn.init.normal_(self.y_embedder.encoder[0].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.encoder[2].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.encoder[5].weight, std=0.02)
+        nn.init.normal_(self.y_embedder.encoder[3].weight, std=0.02)
+        nn.init.normal_(self.y_embedder.encoder[7].weight, std=0.02)
 
         nn.init.normal_(self.y_embedder.decoder[0].weight, std=0.02)
         nn.init.normal_(self.y_embedder.decoder[3].weight, std=0.02)
@@ -270,7 +265,7 @@ class DiT(nn.Module):
         """
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
-        y, y_hat = self.y_embedder(y)
+        y, y_hat = self.y_embedder(y, self.training)  # (N, D), (N, C, H, W)
         c = t + y                                # (N, D)
         for block in self.blocks:
             x = block(x, c)                      # (N, T, D)
@@ -285,7 +280,7 @@ class DiT(nn.Module):
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
-        model_out = self.forward(combined, t, y)
+        model_out, _ = self.forward(combined, t, y)
         # For exact reproducibility reasons, we apply classifier-free guidance on only
         # three channels by default. The standard approach to cfg applies it to all channels.
         # This can be done by uncommenting the following line and commenting-out the line following that.
