@@ -9,7 +9,7 @@ import random
 
 # ------------------ Setup ------------------
 device = 'mps' if torch.backends.mps.is_available() else 'cpu'
-num_samples = 1
+num_samples = 10
 # seed = 1000
 # random.seed(seed)
 # np.random.seed(seed)
@@ -18,7 +18,7 @@ num_samples = 1
 
 # Load model
 model = DiT_models["DiT-XL"](input_size=(1, 30)).to(device)
-ckpt_path = "checkpoints/DiT_XL_cfg.pth"
+ckpt_path = "checkpoints/DiT_XL_cfg_decoded.pth"
 state = torch.load(ckpt_path, map_location=device)
 if isinstance(state, dict) and 'model' in state:
     state = state['model']
@@ -29,7 +29,7 @@ diffusion = create_diffusion(timestep_respacing="")
 # Dataset / single batch
 dataset = yf_Trendlines(test=False)
 loader = DataLoader(dataset, batch_size=1, shuffle=False)
-x, y = list(loader)[100]
+x, y = list(loader)[1000]
 x = x.repeat(num_samples, 1, 1, 1)
 y = y.repeat(num_samples, 1, 1, 1)
 
@@ -40,7 +40,7 @@ x = torch.cat([x, x], 0)
 y_null = model.y_embedder.null_trendline.expand(y.shape[0], -1, -1, -1).to(device)
 y = torch.cat([y, y_null], 0)
 
-model_kwargs = dict(y=y, cfg_scale=1.0)
+model_kwargs = dict(y=y, cfg_scale=4.0)
 
 # --------------- Full reverse diffusion sampling (prediction) ---------------
 with torch.no_grad():

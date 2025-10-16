@@ -112,11 +112,11 @@ class TrendlineEmbedder(nn.Module):
         return y
     
     def forward(self, y, train=True, force_drop_ids=None):
+        y_hat = self.decoder(self.encoder(y))
         # Apply dropout for unconditional during training or forced
         if (train and self.dropout_prob > 0) or (force_drop_ids is not None):
             y = self.drop_trendline(y, force_drop_ids)
         y_emb = self.encoder(y)
-        y_hat = self.decoder(y_emb)
         return y_emb, y_hat
 
 
