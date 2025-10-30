@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from scipy.stats import gaussian_kde
 
-from sklearn.neighbors import NearestNeighbors
 from sklearn.decomposition import PCA
 
 window = 30
@@ -31,33 +31,66 @@ phr = phr[:, :, 1]
 fhr_min = fhr.min(axis=1, keepdims=True)
 fhr_max = fhr.max(axis=1, keepdims=True)
 fhr_norm = (fhr - fhr_min) / (fhr_max - fhr_min + 1e-8)
+fhr_slopes = fhr_norm[:, -1] - fhr_norm[:, 0]
 
 phr_min = phr.min(axis=1, keepdims=True)
 phr_max = phr.max(axis=1, keepdims=True)
 phr_norm = (phr - phr_min) / (phr_max - phr_min + 1e-8)
+phr_slopes = phr_norm[:, -1] - phr_norm[:, 0]
 
-knn = NearestNeighbors(n_neighbors=n_neighbors, algorithm='auto').fit(phr_norm)
-
-anchor = np.array([phr[idx]])
-dist, indices = knn.kneighbors(anchor)
-
-sns.histplot(dist.squeeze(0), bins=10)
-plt.xlabel("Distances")
-plt.show()
-
-k_fhr = fhr_norm[indices[0]]
+idx = np.arange(len(fhr_norm))/len(fhr_norm)
+fhr_raw = np.concatenate([idx[:, None], fhr_slopes[:, None]], axis=1)
+phr_raw = np.concatenate([idx[:, None], phr_slopes[:, None]], axis=1)
 
 pca = PCA(n_components=1)
-k_pca = pca.fit_transform(k_fhr)
+f_pca = pca.fit_transform(fhr_raw).squeeze()
+p_pca = pca.fit_transform(phr_raw).squeeze()
 
-sns.histplot(k_pca.squeeze(1), bins=10, kde=True, legend=False)
-plt.xlabel("FHR")
-plt.title("pdf of P( FHR | PHR )")
-plt.tight_layout()
-plt.show()
+print(fhr_slopes.shape, phr_slopes.shape)
+print(fhr_raw.shape, phr_raw.shape)
+print(f_pca.shape, p_pca.shape)
 
-plt.scatter(dist.squeeze(0), k_pca.squeeze(1))
-plt.xlabel("Distance")
+plt.scatter(p_pca, f_pca, s=5, alpha=0.5)
+plt.xlabel("PHR")
 plt.ylabel("FHR")
+plt.title("1D Visualization of FHR and PHR slopes using PCA")
 plt.tight_layout()
 plt.show()
+
+sns.kdeplot(
+    x=p_pca, y=f_pca,
+    fill=True, thresh=0, levels=100, cmap="mako",
+)
+plt.xlabel("PHR Slopes")
+plt.ylabel("FHR Slopes")
+plt.title("2D Density Plot of FHR and PHR Slopes")
+plt.tight_layout()
+plt.show()
+
+
+# --- New code to get (x, y, z) coordinates from KDE ---
+data_for_kde = np.vstack([p_pca, f_pca])
+
+kde = gaussian_kde(data_for_kde)
+
+grid_x = np.linspace(p_pca.min(), p_pca.max(), 100)
+grid_y = np.linspace(f_pca.min(), f_pca.max(), 100)
+X, Y = np.meshgrid(grid_x, grid_y)
+positions = np.vstack([X.ravel(), Y.ravel()])
+
+Z = np.reshape(kde(positions).T, X.shape)
+
+plt.contourf(X, Y, Z, cmap='mako', levels=100)
+plt.xlabel("PHR Slopes")
+plt.ylabel("FHR Slopes")
+plt.title("Manual KDE Plot from (x, y, z) Coords")
+plt.colorbar(label='Density')
+plt.tight_layout()
+plt.show()
+
+xyz_points = np.vstack([X.ravel(), Y.ravel(), Z.ravel()]).T
+print("Shape of (x, y, z) points array:", xyz_points.shape)
+print("First 5 (x, y, z) points:")
+print(xyz_points[:5])
+
+np.save('manim/joint_prob_xyz_points.npy', xyz_points)
