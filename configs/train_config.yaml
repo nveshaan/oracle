@@ -16,5 +16,5 @@ ckpt_every: 5000
 
 wandb:
   project: "oracle"
-  name: "yfinance-XL-cfg-decoded"
+  name: "yfinance-XL-cfg-decoded-postLN"
   log: True

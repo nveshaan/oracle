@@ -1,6 +1,18 @@
-import yfinance as yf
+from polygon import RESTClient
 
-ticker = '^NDX'
-data = yf.download(ticker, start='2025-9-1', end='2025-10-11', interval='1d')
+client = RESTClient("DM1scQhwN988Q_oxTQAtEkvHkHnezUr6")
 
-data.to_csv('data/test/9,1 10,11 1day.csv')
+aggs = []
+for a in client.list_aggs(
+    "AAPL",
+    1,
+    "minute",
+    "2024-09-09",
+    "2024-09-11",
+    adjusted="true",
+    sort="asc",
+    limit=120,
+):
+    aggs.append(a)
+
+print(aggs)

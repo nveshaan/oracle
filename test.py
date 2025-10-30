@@ -18,7 +18,7 @@ num_samples = 10
 
 # Load model
 model = DiT_models["DiT-XL"](input_size=(1, 30)).to(device)
-ckpt_path = "checkpoints/DiT_XL_cfg_decoded.pth"
+ckpt_path = "checkpoints/DiT_XL_postLN.pth"
 state = torch.load(ckpt_path, map_location=device)
 if isinstance(state, dict) and 'model' in state:
     state = state['model']
