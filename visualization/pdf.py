@@ -57,6 +57,11 @@ plt.title("1D Visualization of FHR and PHR slopes using PCA")
 plt.tight_layout()
 plt.show()
 
+data = np.vstack([p_pca, f_pca]).T
+print(data.shape)
+np.save('manim/stock_scatter_data.npy', data)
+exit()
+
 sns.kdeplot(
     x=p_pca, y=f_pca,
     fill=True, thresh=0, levels=100, cmap="mako",
