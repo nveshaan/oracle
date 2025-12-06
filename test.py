@@ -6,10 +6,11 @@ from models import DiT_models
 import numpy as np
 import matplotlib.pyplot as plt
 import random
+from scipy.stats import gaussian_kde
 
 # ------------------ Setup ------------------
 device = 'mps' if torch.backends.mps.is_available() else 'cpu'
-num_samples = 10
+num_samples = 100
 # seed = 1000
 # random.seed(seed)
 # np.random.seed(seed)
@@ -29,7 +30,7 @@ diffusion = create_diffusion(timestep_respacing="")
 # Dataset / single batch
 dataset = yf_Trendlines(test=False)
 loader = DataLoader(dataset, batch_size=1, shuffle=False)
-x, y = list(loader)[1000]
+x, y = list(loader)[100]
 x = x.repeat(num_samples, 1, 1, 1)
 y = y.repeat(num_samples, 1, 1, 1)
 
@@ -67,7 +68,34 @@ gt = np.arctanh(x_[0, :].squeeze()/np.pi)/0.01
 pred = np.arctanh(sample_[:, :].squeeze()/np.pi)/0.01
 
 for i in range(num_samples):
-    plt.plot(pred[i], label='Predicted', color='orange', alpha=0.3)
+    plt.plot(pred[i], label='Predicted', color='orange', alpha=0.2)
 plt.plot(gt, label='Ground Truth')
 plt.tight_layout()
 plt.show()
+
+# KDE heatmap for each time step
+time_steps = np.arange(30)
+v_min, v_max = pred.min(), pred.max()
+v_grid = np.linspace(v_min, v_max, 100)  # 100 bins for values
+density = np.zeros((30, 100))
+
+for t in time_steps:
+    values = pred[:, t]
+    if len(np.unique(values)) > 1:  # avoid singular matrix for KDE
+        kde = gaussian_kde(values)
+        density[t, :] = kde(v_grid)
+    else:
+        # if all values are the same, place density at that value
+        idx = np.argmin(np.abs(v_grid - values[0]))
+        density[t, idx] = 1.0
+
+# Plot the heatmap
+fig, ax = plt.subplots(figsize=(10, 6))
+c = ax.pcolormesh(time_steps, v_grid, density.T, shading='gouraud', cmap='viridis')
+ax.set_xlabel('Time Step')
+ax.set_ylabel('Value')
+ax.set_title('KDE Heatmap of Predicted Values per Time Step')
+plt.colorbar(c, ax=ax, label='Density')
+plt.tight_layout()
+plt.show()
+

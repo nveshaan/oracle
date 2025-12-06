@@ -60,11 +60,10 @@ plt.show()
 data = np.vstack([p_pca, f_pca]).T
 print(data.shape)
 np.save('manim/stock_scatter_data.npy', data)
-exit()
 
 sns.kdeplot(
     x=p_pca, y=f_pca,
-    fill=True, thresh=0, levels=100, cmap="mako",
+    fill=True, thresh=0, levels=10, cmap="mako",
 )
 plt.xlabel("PHR Slopes")
 plt.ylabel("FHR Slopes")
@@ -85,11 +84,10 @@ positions = np.vstack([X.ravel(), Y.ravel()])
 
 Z = np.reshape(kde(positions).T, X.shape)
 
-plt.contourf(X, Y, Z, cmap='mako', levels=100)
-plt.xlabel("PHR Slopes")
-plt.ylabel("FHR Slopes")
-plt.title("Manual KDE Plot from (x, y, z) Coords")
-plt.colorbar(label='Density')
+plt.style.use('Solarize_Light2')
+plt.contourf(X, Y, Z, cmap='mako', levels=10, fill=False)
+plt.xlabel("Past Trendlines")
+plt.ylabel("Future Trendlines")
 plt.tight_layout()
 plt.show()
 
