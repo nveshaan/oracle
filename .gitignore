@@ -212,3 +212,4 @@ __marimo__/
 /wandb
 /results
 /checkpoints
+.vscode
