@@ -142,7 +142,7 @@ class TS2VecWrapper(nn.Module):
     def forward(self, y, train=True, force_drop_ids=None):
         if (train and self.dropout_prob > 0) or (force_drop_ids is not None):
             y = self.drop_trendline(y, force_drop_ids)
-        y_emb = self.ts2vec.encode(y)
+        y_emb = self.ts2vec.encode(y, encoding_window='full_series')  # Pool to (B, hidden_size)
         return y_emb
 
 
@@ -169,8 +169,8 @@ class DiTBlock(nn.Module):
 
     def forward(self, x, c):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * modulate(self.norm1(self.attn(x)), shift_msa, scale_msa)
-        x = x + gate_mlp.unsqueeze(1) * modulate(self.norm2(self.mlp(x)), shift_mlp, scale_mlp)
+        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
 
@@ -200,7 +200,7 @@ class DiT(nn.Module):
     """
     def __init__(
         self,
-        input_size=(1, 30),
+        input_size=(1, 60),
         patch_size=(1, 1),
         in_channels=7,
         hidden_size=1152,
@@ -249,14 +249,14 @@ class DiT(nn.Module):
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.x_embedder.proj.bias, 0)
 
-        # Initialize trendline embedder params:
-        nn.init.normal_(self.y_embedder.encoder[0].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.encoder[3].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.encoder[7].weight, std=0.02)
+        # # Initialize trendline embedder params:
+        # nn.init.normal_(self.y_embedder.encoder[0].weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.encoder[3].weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.encoder[7].weight, std=0.02)
 
-        nn.init.normal_(self.y_embedder.decoder[0].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.decoder[3].weight, std=0.02)
-        nn.init.normal_(self.y_embedder.decoder[5].weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.decoder[0].weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.decoder[3].weight, std=0.02)
+        # nn.init.normal_(self.y_embedder.decoder[5].weight, std=0.02)
 
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -292,13 +292,13 @@ class DiT(nn.Module):
         """
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
-        y, y_hat = self.y_embedder(y, self.training)  # (N, D), (N, C, H, W)
+        y = self.y_embedder(y, self.training)  # (N, D)
         c = t + y                                # (N, D)
         for block in self.blocks:
             x = block(x, c)                      # (N, T, D)
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
         x = self.unpatchify(x)                   # (N, out_channels, H, W)
-        return x, y_hat
+        return x
 
     def forward_with_cfg(self, x, t, y, cfg_scale):
         """
@@ -307,12 +307,12 @@ class DiT(nn.Module):
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
-        model_out, _ = self.forward(combined, t, y)
+        model_out = self.forward(combined, t, y)
         # For exact reproducibility reasons, we apply classifier-free guidance on only
         # three channels by default. The standard approach to cfg applies it to all channels.
         # This can be done by uncommenting the following line and commenting-out the line following that.
-        # eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
-        eps, rest = model_out[:, :3], model_out[:, 3:]
+        eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
+        # eps, rest = model_out[:, :3], model_out[:, 3:]
         cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
         half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
         eps = torch.cat([half_eps, half_eps], dim=0)

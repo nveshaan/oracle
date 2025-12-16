@@ -4,7 +4,7 @@ from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
 from encoder_models import TSEncoder
 from encoder_models.losses import hierarchical_contrastive_loss
-from utils import take_per_row, split_with_nan, centerize_vary_length_series, torch_pad_nan
+from encoder_models.utils import take_per_row, split_with_nan, centerize_vary_length_series, torch_pad_nan
 import math
 
 class TS2Vec:
@@ -201,7 +201,7 @@ class TS2Vec:
             if slicing is not None:
                 out = out[:, slicing]
             
-        return out.cpu()
+        return out
     
     def encode(self, data, mask=None, encoding_window=None, causal=False, sliding_length=None, sliding_padding=0):
         ''' Compute representations using the model.

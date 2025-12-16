@@ -103,8 +103,14 @@ class yf_Trendlines(Dataset):
     
 
 class btc_Trendlines(Dataset):
-    def __init__(self, order=3, seq_len=300, pred_len=60, cache_path='data/btcusd_ta.npy'):
+    # Data split boundaries (row indices in CSV)
+    TRAIN_START = 3668959
+    TRAIN_END = 6943079
+    TEST_START = 6943079
+    
+    def __init__(self, test=False, order=3, seq_len=300, pred_len=60, cache_path='data/btcusd_ta.npy'):
         super().__init__()
+        self.test = test
         self.order = order
         self.seq_len = seq_len
         self.pred_len = pred_len
@@ -127,10 +133,10 @@ class btc_Trendlines(Dataset):
             mmap = np.memmap(cache_path, dtype=np.float32, mode='w+', shape=(total_rows, n_cols))
             offset = 0
             for chunk in chunks:
-                # Convert to float64 first, clip to float32 range, then cast
+                # Replace inf/nan and clip to safe float32 range
                 arr = chunk.to_numpy(dtype=np.float64)
-                arr = np.clip(arr, -3.4e38, 3.4e38)  # float32 range
-                arr = np.nan_to_num(arr, nan=0.0, posinf=3.4e38, neginf=-3.4e38)
+                arr = np.nan_to_num(arr, nan=0.0, posinf=1e30, neginf=-1e30)
+                arr = np.clip(arr, -1e30, 1e30)
                 mmap[offset:offset + len(arr)] = arr.astype(np.float32)
                 offset += len(arr)
             mmap.flush()
@@ -146,16 +152,28 @@ class btc_Trendlines(Dataset):
         
         self.data = np.memmap(cache_path, dtype=np.float32, mode='r', shape=(n_rows, n_cols))
         
+        # Set data range based on train/test split
+        if test:
+            self.start_idx = self.TEST_START
+            self.end_idx = n_rows
+        else:
+            self.start_idx = self.TRAIN_START
+            self.end_idx = self.TRAIN_END
+        
         # Store only start indices (not full index lists)
-        self.n_samples = n_rows - seq_len - pred_len
+        # Skip n rows between samples to reduce correlation
+        self.stride = 30
+        usable_rows = self.end_idx - self.start_idx - seq_len - pred_len
+        self.n_samples = usable_rows // self.stride
         
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, idx):
         # Compute indices on-the-fly instead of storing lists
-        p_start = idx
-        p_end = idx + self.seq_len
+        # Each sample starts at start_idx + idx * stride
+        p_start = self.start_idx + idx * self.stride
+        p_end = p_start + self.seq_len
         f_start = p_end
         f_end = f_start + self.pred_len
         
@@ -177,12 +195,12 @@ class btc_Trendlines(Dataset):
         ptrend_tensor = torch.from_numpy(ptrend).float()  # (300, 91)
 
         # Build Fourier features for ftrend
-        temp = [torch.ones(1, self.pred_len)]
+        temp = [torch.ones_like(ftrend_tensor)]
         for i in range(self.order):
             temp.append(torch.sin(ftrend_tensor * (i + 1)))
             temp.append(torch.cos(ftrend_tensor * (i + 1)))
 
-        ftrend_out = torch.cat(temp, dim=0)  # (7, 60)
+        ftrend_out = torch.cat(temp, dim=0).unsqueeze(1)  # (7, 1, 60)
 
         return ftrend_out, ptrend_tensor
 
@@ -191,5 +209,5 @@ if __name__ == '__main__':
     ds = btc_Trendlines()
     dl = DataLoader(ds, batch_size=8, shuffle=True)
     batch = next(iter(dl))
-    print("Batch ftrend tensor shape (C,1,T):", batch[0].shape)
-    print("Batch ptrend tensor shape (C,300,T):", batch[1].shape)
+    print("Batch ftrend tensor shape:", batch[0].shape)
+    print("Batch ptrend tensor shape:", batch[1].shape)
