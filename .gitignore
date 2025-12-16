@@ -213,3 +213,4 @@ __marimo__/
 /results
 /checkpoints
 .vscode
+.DS_Store

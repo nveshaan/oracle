@@ -14,6 +14,7 @@ import torch.nn as nn
 import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
+from ts2vec import TS2Vec
 
 
 def modulate(x, shift, scale):
@@ -118,6 +119,31 @@ class TrendlineEmbedder(nn.Module):
             y = self.drop_trendline(y, force_drop_ids)
         y_emb = self.encoder(y)
         return y_emb, y_hat
+    
+
+class TS2VecWrapper(nn.Module):
+    def __init__(self, hidden_size, model='DiT-S', input_dims=91, seq_len=300, dropout_prob=0.1):
+        super().__init__()
+        self.ts2vec = TS2Vec(input_dims=input_dims, output_dims=hidden_size, device='mps')
+        self.ts2vec.load(f'encoder_models/checkpoints/{model}.pkl')
+        self.dropout_prob = dropout_prob
+        # Learned null trendline for unconditional generation (B, seq_len, input_dims)
+        self.null_trendline = nn.Parameter(torch.zeros(1, seq_len, input_dims))
+
+    def drop_trendline(self, y, force_drop_ids=None):
+        if force_drop_ids is None:
+            drop_ids = torch.rand(y.shape[0], device=y.device) < self.dropout_prob
+        else:
+            drop_ids = force_drop_ids == 1
+        null_expanded = self.null_trendline.expand(y.shape[0], -1, -1)
+        y = torch.where(drop_ids.unsqueeze(-1).unsqueeze(-1), null_expanded, y)
+        return y
+
+    def forward(self, y, train=True, force_drop_ids=None):
+        if (train and self.dropout_prob > 0) or (force_drop_ids is not None):
+            y = self.drop_trendline(y, force_drop_ids)
+        y_emb = self.ts2vec.encode(y)
+        return y_emb
 
 
 #################################################################################
@@ -182,6 +208,7 @@ class DiT(nn.Module):
         num_heads=16,
         mlp_ratio=4.0,
         learn_sigma=True,
+        model = 'DiT-S',
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -192,7 +219,7 @@ class DiT(nn.Module):
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
-        self.y_embedder = TrendlineEmbedder(hidden_size)
+        self.y_embedder = TS2VecWrapper(hidden_size, model=model, input_dims=91, dropout_prob=0.1)
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)

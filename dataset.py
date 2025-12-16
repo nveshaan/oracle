@@ -99,10 +99,52 @@ class yf_Trendlines(Dataset):
     
     def tanh(self, x):
         return np.tanh(x*0.01)*np.pi
+    
+
+class btc_Trendlines(Dataset):
+    def __init__(self, order=3):
+        super().__init__()
+        self.order = order
+        self.data = pd.read_csv('data/btcusd_ta.csv')
+        self.data = self.data.dropna().to_numpy()[3668959:, 1:]
+        self.pindex = [[i+j for j in range(300)] for i in range(0, len(self.data)-360)]
+        self.findex = [[i+j for j in range(60)] for i in range(300, len(self.data)-60)]
+
+    def __len__(self):
+        return len(self.pindex)
+
+    def __getitem__(self, idx):
+        ptrend = self.data[self.pindex[idx]]
+        ftrend = self.data[self.findex[idx], 40]  # (60,)
+
+        # Normalize each feature (column) across time (axis=0)
+        min_vals = np.nanmin(ptrend, axis=0, keepdims=True)
+        max_vals = np.nanmax(ptrend, axis=0, keepdims=True)
+        range_vals = max_vals - min_vals
+        range_vals[range_vals == 0] = 1  # Avoid division by zero
+        ptrend = (ptrend - min_vals) / range_vals  # (300, num_features)
+
+        min_val = np.nanmin(ftrend)
+        ftrend = np.tanh((ftrend - min_val) * 0.01) * np.pi  # (60,)
+
+        # Convert to tensor
+        ftrend_tensor = torch.tensor(ftrend, dtype=torch.float32).unsqueeze(0)  # (1, 60)
+        ptrend_tensor = torch.tensor(ptrend, dtype=torch.float32)  # (300, num_features)
+
+        # Build Fourier features for ftrend
+        temp = [torch.ones(1, ftrend_tensor.shape[1])]  # (1, 60)
+        for i in range(self.order):
+            temp.append(torch.sin(ftrend_tensor * (i + 1)))  # (1, 60)
+            temp.append(torch.cos(ftrend_tensor * (i + 1)))  # (1, 60)
+
+        ftrend_out = torch.cat(temp, dim=0)  # (1 + 2*order, 60) = (7, 60) if order=3
+
+        return ftrend_out, ptrend_tensor  # (7, 60), (300, num_features)
+
 
 if __name__ == '__main__':
-    ds = yf_Trendlines()
+    ds = btc_Trendlines()
     dl = DataLoader(ds, batch_size=8, shuffle=True)
     batch = next(iter(dl))
-    print("Batch fhr tensor shape (C,1,T):", batch[0].shape)
-    print("Batch condition tensor shape (C,4,T):", batch[1].shape)
+    print("Batch ftrend tensor shape (C,1,T):", batch[0].shape)
+    print("Batch ptrend tensor shape (C,300,T):", batch[1].shape)

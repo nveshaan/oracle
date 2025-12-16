@@ -83,6 +83,7 @@ def main(cfg: DictConfig):
     trendline_size = (1, 30)
     model = DiT_models[cfg.model](
         input_size=trendline_size,
+        model = cfg.model,
     )
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
