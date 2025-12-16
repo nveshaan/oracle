@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 import torch
@@ -102,44 +103,88 @@ class yf_Trendlines(Dataset):
     
 
 class btc_Trendlines(Dataset):
-    def __init__(self, order=3):
+    def __init__(self, order=3, seq_len=300, pred_len=60, cache_path='data/btcusd_ta.npy'):
         super().__init__()
         self.order = order
-        self.data = pd.read_csv('data/btcusd_ta.csv')
-        self.data = self.data.dropna().to_numpy()[3668959:, 1:]
-        self.pindex = [[i+j for j in range(300)] for i in range(0, len(self.data)-360)]
-        self.findex = [[i+j for j in range(60)] for i in range(300, len(self.data)-60)]
-
+        self.seq_len = seq_len
+        self.pred_len = pred_len
+        
+        # Convert CSV to memory-mapped numpy array (one-time cost)
+        if not os.path.exists(cache_path):
+            print("Converting CSV to numpy memmap (one-time)...")
+            # Read in chunks to avoid memory spike
+            chunks = pd.read_csv('data/btcusd_ta.csv', chunksize=100000, usecols=lambda c: c != 'Date')
+            first_chunk = next(chunks)
+            n_cols = first_chunk.shape[1]
+            
+            # Count total rows first
+            total_rows = len(first_chunk)
+            for chunk in chunks:
+                total_rows += len(chunk)
+            
+            # Create memmap and fill it
+            chunks = pd.read_csv('data/btcusd_ta.csv', chunksize=100000, usecols=lambda c: c != 'Date')
+            mmap = np.memmap(cache_path, dtype=np.float32, mode='w+', shape=(total_rows, n_cols))
+            offset = 0
+            for chunk in chunks:
+                # Convert to float64 first, clip to float32 range, then cast
+                arr = chunk.to_numpy(dtype=np.float64)
+                arr = np.clip(arr, -3.4e38, 3.4e38)  # float32 range
+                arr = np.nan_to_num(arr, nan=0.0, posinf=3.4e38, neginf=-3.4e38)
+                mmap[offset:offset + len(arr)] = arr.astype(np.float32)
+                offset += len(arr)
+            mmap.flush()
+            del mmap
+            print(f"Saved memmap: {total_rows} rows, {n_cols} cols")
+        
+        # Load as memory-mapped (doesn't load into RAM)
+        # First, get shape from a quick read
+        temp = np.memmap(cache_path, dtype=np.float32, mode='r')
+        n_cols = 91  # TA features count (adjust if different)
+        n_rows = len(temp) // n_cols
+        del temp
+        
+        self.data = np.memmap(cache_path, dtype=np.float32, mode='r', shape=(n_rows, n_cols))
+        
+        # Store only start indices (not full index lists)
+        self.n_samples = n_rows - seq_len - pred_len
+        
     def __len__(self):
-        return len(self.pindex)
+        return self.n_samples
 
     def __getitem__(self, idx):
-        ptrend = self.data[self.pindex[idx]]
-        ftrend = self.data[self.findex[idx], 40]  # (60,)
+        # Compute indices on-the-fly instead of storing lists
+        p_start = idx
+        p_end = idx + self.seq_len
+        f_start = p_end
+        f_end = f_start + self.pred_len
+        
+        ptrend = np.array(self.data[p_start:p_end])  # Copy from memmap
+        ftrend = np.array(self.data[f_start:f_end, 40])  # Only column 40
 
         # Normalize each feature (column) across time (axis=0)
-        min_vals = np.nanmin(ptrend, axis=0, keepdims=True)
-        max_vals = np.nanmax(ptrend, axis=0, keepdims=True)
+        min_vals = ptrend.min(axis=0, keepdims=True)
+        max_vals = ptrend.max(axis=0, keepdims=True)
         range_vals = max_vals - min_vals
-        range_vals[range_vals == 0] = 1  # Avoid division by zero
-        ptrend = (ptrend - min_vals) / range_vals  # (300, num_features)
+        range_vals[range_vals == 0] = 1
+        ptrend = (ptrend - min_vals) / range_vals
 
-        min_val = np.nanmin(ftrend)
-        ftrend = np.tanh((ftrend - min_val) * 0.01) * np.pi  # (60,)
+        min_val = ftrend.min()
+        ftrend = np.tanh((ftrend - min_val) * 0.01) * np.pi
 
         # Convert to tensor
-        ftrend_tensor = torch.tensor(ftrend, dtype=torch.float32).unsqueeze(0)  # (1, 60)
-        ptrend_tensor = torch.tensor(ptrend, dtype=torch.float32)  # (300, num_features)
+        ftrend_tensor = torch.from_numpy(ftrend).float().unsqueeze(0)  # (1, 60)
+        ptrend_tensor = torch.from_numpy(ptrend).float()  # (300, 91)
 
         # Build Fourier features for ftrend
-        temp = [torch.ones(1, ftrend_tensor.shape[1])]  # (1, 60)
+        temp = [torch.ones(1, self.pred_len)]
         for i in range(self.order):
-            temp.append(torch.sin(ftrend_tensor * (i + 1)))  # (1, 60)
-            temp.append(torch.cos(ftrend_tensor * (i + 1)))  # (1, 60)
+            temp.append(torch.sin(ftrend_tensor * (i + 1)))
+            temp.append(torch.cos(ftrend_tensor * (i + 1)))
 
-        ftrend_out = torch.cat(temp, dim=0)  # (1 + 2*order, 60) = (7, 60) if order=3
+        ftrend_out = torch.cat(temp, dim=0)  # (7, 60)
 
-        return ftrend_out, ptrend_tensor  # (7, 60), (300, num_features)
+        return ftrend_out, ptrend_tensor
 
 
 if __name__ == '__main__':
