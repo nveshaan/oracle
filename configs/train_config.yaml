@@ -7,10 +7,11 @@ results_dir: "results"
 model: "DiT-S"   # choices: [list(DiT_models.keys())]
 
 epochs: 10
-batch_size: 64
-lr: 1e-6
+batch_size: 128
+lr: 1e-4
 seed: 42
 num_workers: 4
+loss_scale: 1
 
 log_every: 50
 ckpt_every: 5000

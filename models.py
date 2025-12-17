@@ -25,6 +25,22 @@ def modulate(x, shift, scale):
 #               Embedding Layers for Timesteps and Class Labels                 #
 #################################################################################
 
+class PatchEmbed1D(nn.Module):
+    def __init__(self, seq_len, patch_size, in_chans, embed_dim):
+        super().__init__()
+        self.proj = nn.Conv1d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.num_patches = seq_len // patch_size
+        self.patch_size = patch_size
+        self.seq_len = seq_len
+
+    def forward(self, x):
+        # Input expected shape: [B, C, L] (Batch, Channels, Length)
+        x = self.proj(x)  # Output shape: [B, embed_dim, num_patches]
+        x = x.flatten(2) # Flatten into [B, embed_dim, num_patches] (length of embeddings)
+        x = x.transpose(1, 2)  # Transpose to [B, num_patches, embed_dim]
+        return x
+
+
 class TimestepEmbedder(nn.Module):
     """
     Embeds scalar timesteps into vector representations.
@@ -181,7 +197,12 @@ class FinalLayer(nn.Module):
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(hidden_size, patch_size[0] * patch_size[1] * out_channels, bias=True)
+        # Handle both 1D (int) and 2D (tuple) patch_size
+        if isinstance(patch_size, (tuple, list)):
+            patch_dim = patch_size[0] * patch_size[1]
+        else:
+            patch_dim = patch_size
+        self.linear = nn.Linear(hidden_size, patch_dim * out_channels, bias=True)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 2 * hidden_size, bias=True)
@@ -202,7 +223,7 @@ class DiT(nn.Module):
         self,
         input_size=(1, 60),
         patch_size=(1, 1),
-        in_channels=7,
+        in_channels=1,
         hidden_size=1152,
         depth=28,
         num_heads=16,
@@ -217,7 +238,7 @@ class DiT(nn.Module):
         self.patch_size = patch_size
         self.num_heads = num_heads
 
-        self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
+        self.x_embedder = PatchEmbed1D(seq_len=input_size[1], patch_size=patch_size[0], in_chans=in_channels, embed_dim=hidden_size)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = TS2VecWrapper(hidden_size, model=model, input_dims=91, dropout_prob=0.1)
         num_patches = self.x_embedder.num_patches
@@ -240,9 +261,16 @@ class DiT(nn.Module):
         self.apply(_basic_init)
 
         # Initialize (and freeze) pos_embed by sin-cos embedding:
-        gh, gw = self.x_embedder.grid_size
-        pos_embed = get_2d_sincos_pos_embed_non_square(self.pos_embed.shape[-1], gh, gw)
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+        if isinstance(self.x_embedder, PatchEmbed1D):
+            # 1D positional embedding
+            num_patches = self.x_embedder.num_patches
+            pos_embed = get_1d_sincos_pos_embed(self.pos_embed.shape[-1], num_patches)
+            self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+        else:
+            # 2D positional embedding
+            gh, gw = self.x_embedder.grid_size
+            pos_embed = get_2d_sincos_pos_embed_non_square(self.pos_embed.shape[-1], gh, gw)
+            self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
         # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
         w = self.x_embedder.proj.weight.data
@@ -274,14 +302,29 @@ class DiT(nn.Module):
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
     def unpatchify(self, x):
+        """
+        Reconstruct sequence from patch tokens.
+        Handles both 1D and 2D patch embeddings.
+        """
         N, T, _ = x.shape
         c = self.out_channels
-        gh, gw = self.x_embedder.grid_size  # (grid_h, grid_w)
-        p_h, p_w = self.x_embedder.patch_size
-        assert gh * gw == T, "Token count mismatch"
-        x = x.reshape(N, gh, gw, p_h, p_w, c)            # (N, gh, gw, ph, pw, C)
-        x = x.permute(0, 5, 1, 3, 2, 4).contiguous()     # (N, C, gh, ph, gw, pw)
-        return x.reshape(N, c, gh * p_h, gw * p_w)
+        
+        if isinstance(self.x_embedder, PatchEmbed1D):
+            # 1D case: x: (N, T, patch_size * out_channels)
+            p = self.x_embedder.patch_size
+            assert T == self.x_embedder.num_patches, "Token count mismatch"
+            # x: (N, T, p * c) -> (N, T, p, c) -> (N, c, T, p) -> (N, c, T * p)
+            x = x.reshape(N, T, p, c)
+            x = x.permute(0, 3, 1, 2).contiguous()  # (N, c, T, p)
+            return x.reshape(N, c, T * p)
+        else:
+            # 2D case: x: (N, T, patch_size[0] * patch_size[1] * out_channels)
+            gh, gw = self.x_embedder.grid_size  # (grid_h, grid_w)
+            p_h, p_w = self.x_embedder.patch_size
+            assert gh * gw == T, "Token count mismatch"
+            x = x.reshape(N, gh, gw, p_h, p_w, c)            # (N, gh, gw, ph, pw, C)
+            x = x.permute(0, 5, 1, 3, 2, 4).contiguous()     # (N, C, gh, ph, gw, pw)
+            return x.reshape(N, c, gh * p_h, gw * p_w)
 
     def forward(self, x, t, y):
         """
@@ -323,6 +366,28 @@ class DiT(nn.Module):
 #                   Sine/Cosine Positional Embedding Functions                  #
 #################################################################################
 # https://github.com/facebookresearch/mae/blob/main/util/pos_embed.py
+
+def get_1d_sincos_pos_embed(embed_dim, num_patches, cls_token=False, extra_tokens=0):
+    """
+    Generate 1D sinusoidal positional embeddings.
+    embed_dim: embedding dimension
+    num_patches: number of patches/positions
+    return: pos_embed: [num_patches, embed_dim]
+    """
+    pos = np.arange(num_patches, dtype=np.float32)
+    omega = np.arange(embed_dim // 2, dtype=np.float32)
+    omega /= embed_dim / 2.
+    omega = 1. / 10000**omega  # (D/2,)
+
+    out = np.einsum('m,d->md', pos, omega)  # (num_patches, D/2)
+    emb_sin = np.sin(out)
+    emb_cos = np.cos(out)
+    pos_embed = np.concatenate([emb_sin, emb_cos], axis=1)  # (num_patches, D)
+    
+    if cls_token and extra_tokens > 0:
+        pos_embed = np.concatenate([np.zeros([extra_tokens, embed_dim]), pos_embed], axis=0)
+    return pos_embed
+
 
 def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=0):
     """

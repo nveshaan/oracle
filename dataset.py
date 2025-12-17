@@ -103,106 +103,59 @@ class yf_Trendlines(Dataset):
     
 
 class btc_Trendlines(Dataset):
-    # Data split boundaries (row indices in CSV)
-    TRAIN_START = 3668959
-    TRAIN_END = 6943079
-    TEST_START = 6943079
-    
-    def __init__(self, test=False, order=3, seq_len=300, pred_len=60, cache_path='data/btcusd_ta.npy'):
+    def __init__(self, test=False, order=3, seq_len=300, pred_len=60):
         super().__init__()
         self.test = test
         self.order = order
         self.seq_len = seq_len
         self.pred_len = pred_len
-        
-        # Convert CSV to memory-mapped numpy array (one-time cost)
-        if not os.path.exists(cache_path):
-            print("Converting CSV to numpy memmap (one-time)...")
-            # Read in chunks to avoid memory spike
-            chunks = pd.read_csv('data/btcusd_ta.csv', chunksize=100000, usecols=lambda c: c != 'Date')
-            first_chunk = next(chunks)
-            n_cols = first_chunk.shape[1]
-            
-            # Count total rows first
-            total_rows = len(first_chunk)
-            for chunk in chunks:
-                total_rows += len(chunk)
-            
-            # Create memmap and fill it
-            chunks = pd.read_csv('data/btcusd_ta.csv', chunksize=100000, usecols=lambda c: c != 'Date')
-            mmap = np.memmap(cache_path, dtype=np.float32, mode='w+', shape=(total_rows, n_cols))
-            offset = 0
-            for chunk in chunks:
-                # Replace inf/nan and clip to safe float32 range
-                arr = chunk.to_numpy(dtype=np.float64)
-                arr = np.nan_to_num(arr, nan=0.0, posinf=1e30, neginf=-1e30)
-                arr = np.clip(arr, -1e30, 1e30)
-                mmap[offset:offset + len(arr)] = arr.astype(np.float32)
-                offset += len(arr)
-            mmap.flush()
-            del mmap
-            print(f"Saved memmap: {total_rows} rows, {n_cols} cols")
-        
-        # Load as memory-mapped (doesn't load into RAM)
-        # First, get shape from a quick read
-        temp = np.memmap(cache_path, dtype=np.float32, mode='r')
-        n_cols = 91  # TA features count (adjust if different)
-        n_rows = len(temp) // n_cols
-        del temp
-        
-        self.data = np.memmap(cache_path, dtype=np.float32, mode='r', shape=(n_rows, n_cols))
-        
-        # Set data range based on train/test split
+
         if test:
-            self.start_idx = self.TEST_START
-            self.end_idx = n_rows
+            self.data = np.load('data/btc_test.npy', mmap_mode='r')
         else:
-            self.start_idx = self.TRAIN_START
-            self.end_idx = self.TRAIN_END
+            self.data = np.load('data/btc_train.npy', mmap_mode='r')
         
         # Store only start indices (not full index lists)
         # Skip n rows between samples to reduce correlation
         self.stride = 30
-        usable_rows = self.end_idx - self.start_idx - seq_len - pred_len
+        usable_rows = len(self.data) - self.seq_len - self.pred_len
         self.n_samples = usable_rows // self.stride
         
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, idx):
-        # Compute indices on-the-fly instead of storing lists
-        # Each sample starts at start_idx + idx * stride
-        p_start = self.start_idx + idx * self.stride
+        p_start = idx * self.stride
         p_end = p_start + self.seq_len
         f_start = p_end
         f_end = f_start + self.pred_len
-        
-        ptrend = np.array(self.data[p_start:p_end])  # Copy from memmap
-        ftrend = np.array(self.data[f_start:f_end, 40])  # Only column 40
 
-        # Normalize each feature (column) across time (axis=0)
+        ptrend = np.array(self.data[p_start:p_end])      # (300, 91)
+        ftrend = np.array(self.data[f_start-1:f_end, 3]) # (61,)
+
         min_vals = ptrend.min(axis=0, keepdims=True)
         max_vals = ptrend.max(axis=0, keepdims=True)
         range_vals = max_vals - min_vals
         range_vals[range_vals == 0] = 1
         ptrend = (ptrend - min_vals) / range_vals
 
-        min_val = ftrend.min()
-        ftrend = np.tanh((ftrend - min_val) * 0.01) * np.pi
+        log_ret = np.log(ftrend[1:] / ftrend[:-1])  # (60,)
 
-        # Convert to tensor
-        ftrend_tensor = torch.from_numpy(ftrend).float().unsqueeze(0)  # (1, 60)
-        ptrend_tensor = torch.from_numpy(ptrend).float()  # (300, 91)
+        # Use last seq_len log returns BEFORE prediction window
+        past_prices = np.array(self.data[p_start:p_end+1, 3])  # (301,)
+        past_log_ret = np.log(past_prices[1:] / past_prices[:-1])  # (300,)
 
-        # Build Fourier features for ftrend
-        temp = [torch.ones_like(ftrend_tensor)]
-        for i in range(self.order):
-            temp.append(torch.sin(ftrend_tensor * (i + 1)))
-            temp.append(torch.cos(ftrend_tensor * (i + 1)))
+        vol = np.std(past_log_ret)
+        if vol == 0:
+            vol = 1.0  # safety
 
-        ftrend_out = torch.cat(temp, dim=0).unsqueeze(1)  # (7, 1, 60)
+        log_ret_scaled = log_ret / vol
+        log_ret_scaled = np.tanh(log_ret_scaled * 1.0)
 
-        return ftrend_out, ptrend_tensor
+        ftrend_tensor = torch.from_numpy(log_ret_scaled).float().unsqueeze(0)  # (1, 60)
+        ptrend_tensor = torch.from_numpy(ptrend).float()                        # (300, 91)
+
+        return ftrend_tensor, ptrend_tensor, torch.tensor(vol).float()
 
 
 if __name__ == '__main__':

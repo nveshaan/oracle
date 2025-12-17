@@ -12,10 +12,11 @@ step = 30
 n_neighbors = 100
 idx = 10
 
-min = pd.read_csv('data/btcusd_1-min_data.csv').to_numpy()
+min = pd.read_csv('data/btcusd.csv').to_numpy()
+min = np.log(min[1:, 4]/min[:-1, 4])
 skip = len(min) // 2
 
-plt.plot(min[:, 1])
+plt.plot(min)
 plt.title("BTC-USD 1-Minute Close Prices")
 plt.xlabel("Time")
 plt.ylabel("Price")
@@ -24,43 +25,41 @@ plt.show()
 fhr_index = [[i+j for j in range(window)] for i in range(skip + window, len(min)-window, step)]
 phr_index = [[i+j for j in range(window)] for i in range(skip, len(min)-2*window, step)]
 
-fhr = min[fhr_index, 1:]
-phr = min[phr_index, 1:]
+fhr = min[fhr_index]
+phr = min[phr_index]
 
-fhr = fhr - fhr[:, 0, 4][:, None, None]
-phr = phr - phr[:, 0, 4][:, None, None]
+# fhr = fhr - fhr[:, 0][:, None]
+# phr = phr - phr[:, 0][:, None]
 
-fhr = fhr[:, :, 1]
-phr = phr[:, :, 1]
+# fhr_min = fhr.min(axis=1, keepdims=True)
+# fhr_max = fhr.max(axis=1, keepdims=True)
+# fhr_norm = (fhr - fhr_min) / (fhr_max - fhr_min + 1e-8)
+# fhr_slopes = fhr_norm[:, -1] - fhr_norm[:, 0]
 
-fhr_min = fhr.min(axis=1, keepdims=True)
-fhr_max = fhr.max(axis=1, keepdims=True)
-fhr_norm = (fhr - fhr_min) / (fhr_max - fhr_min + 1e-8)
-fhr_slopes = fhr_norm[:, -1] - fhr_norm[:, 0]
-
-phr_min = phr.min(axis=1, keepdims=True)
-phr_max = phr.max(axis=1, keepdims=True)
-phr_norm = (phr - phr_min) / (phr_max - phr_min + 1e-8)
-phr_slopes = phr_norm[:, -1] - phr_norm[:, 0]
+# phr_min = phr.min(axis=1, keepdims=True)
+# phr_max = phr.max(axis=1, keepdims=True)
+# phr_norm = (phr - phr_min) / (phr_max - phr_min + 1e-8)
+# phr_slopes = phr_norm[:, -1] - phr_norm[:, 0]
 
 # idx = np.arange(len(fhr_norm))/len(fhr_norm)
 # fhr_raw = np.concatenate([idx[:, None], fhr_slopes[:, None]], axis=1)
 # phr_raw = np.concatenate([idx[:, None], phr_slopes[:, None]], axis=1)
 
-# pca = PCA(n_components=1)
-# f_pca = pca.fit_transform(fhr_raw).squeeze()
-# p_pca = pca.fit_transform(phr_raw).squeeze()
+pca = PCA(n_components=1)
+f_pca = pca.fit_transform(fhr)
+p_pca = pca.fit_transform(phr)
 
 # print(fhr_slopes.shape, phr_slopes.shape)
 # print(fhr_raw.shape, phr_raw.shape)
 # print(f_pca.shape, p_pca.shape)
 
-# plt.scatter(p_pca, f_pca, s=5, alpha=0.5)
-# plt.xlabel("PHR")
-# plt.ylabel("FHR")
-# plt.title("1D Visualization of FHR and PHR slopes using PCA")
-# plt.tight_layout()
-# plt.show()
+plt.scatter(p_pca, f_pca, s=5, alpha=0.5)
+plt.xlabel("PHR")
+plt.ylabel("FHR")
+plt.title("2D Visualization of past vs future log returns using PCA")
+plt.tight_layout()
+plt.show()
+exit()
 
 # data = np.vstack([p_pca, f_pca]).T
 # print(data.shape)
@@ -78,12 +77,12 @@ phr_slopes = phr_norm[:, -1] - phr_norm[:, 0]
 
 
 # --- New code to get (x, y, z) coordinates from KDE ---
-data_for_kde = np.vstack([phr_slopes, fhr_slopes])
+data_for_kde = np.vstack([p_pca.T, f_pca.T])
 
 kde = gaussian_kde(data_for_kde)
 
-grid_x = np.linspace(phr_slopes.min(), phr_slopes.max(), 100)
-grid_y = np.linspace(fhr_slopes.min(), fhr_slopes.max(), 100)
+grid_x = np.linspace(p_pca.min(), p_pca.max(), 100)
+grid_y = np.linspace(f_pca.min(), f_pca.max(), 100)
 X, Y = np.meshgrid(grid_x, grid_y)
 positions = np.vstack([X.ravel(), Y.ravel()])
 
@@ -92,7 +91,7 @@ Z = np.reshape(kde(positions).T, X.shape)
 plt.style.use('Solarize_Light2')
 plt.contourf(X, Y, Z, cmap='mako', levels=10, fill=False)
 plt.colorbar(label='Density')
-plt.title("2D KDE of Past and Future Trendline Slopes")
+plt.title("2D KDE of Past and Future Log Return Slopes")
 plt.xlabel("Past Trendlines")
 plt.ylabel("Future Trendlines")
 plt.tight_layout()
