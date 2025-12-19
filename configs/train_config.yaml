@@ -9,6 +9,7 @@ model: "DiT-S"   # choices: [list(DiT_models.keys())]
 epochs: 10
 batch_size: 128
 lr: 1e-4
+weight_decay: 0
 seed: 42
 num_workers: 4
 loss_scale: 1

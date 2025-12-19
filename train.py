@@ -93,7 +93,7 @@ def main(cfg: DictConfig):
     print(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
-    opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=1e-5)
+    opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
     dataset = btc_Trendlines(order=3, seq_len=300, pred_len=60)
     loader = DataLoader(
@@ -119,7 +119,7 @@ def main(cfg: DictConfig):
     for epoch in range(cfg.epochs):
         loop = tqdm(loader, desc=f"Epoch {epoch+1}", leave=False)
         for batch_idx, batch in enumerate(loop):
-            x, cond, _ = batch
+            x, cond, _, _ = batch
             x = x.to(device, dtype=torch.float32)
             cond = cond.to(device, dtype=torch.float32)
             t = torch.randint(0, diffusion.num_timesteps, (x.size(0),), device=device)

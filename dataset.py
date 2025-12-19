@@ -131,7 +131,7 @@ class btc_Trendlines(Dataset):
         f_end = f_start + self.pred_len
 
         ptrend = np.array(self.data[p_start:p_end])      # (300, 91)
-        ftrend = np.array(self.data[f_start-1:f_end, 3]) # (61,)
+        ftrend = np.array(self.data[f_start-1:f_end, 41]) # (61,)
 
         min_vals = ptrend.min(axis=0, keepdims=True)
         max_vals = ptrend.max(axis=0, keepdims=True)
@@ -142,7 +142,7 @@ class btc_Trendlines(Dataset):
         log_ret = np.log(ftrend[1:] / ftrend[:-1])  # (60,)
 
         # Use last seq_len log returns BEFORE prediction window
-        past_prices = np.array(self.data[p_start:p_end+1, 3])  # (301,)
+        past_prices = np.array(self.data[p_start:p_end+1, 41])  # (301,)
         past_log_ret = np.log(past_prices[1:] / past_prices[:-1])  # (300,)
 
         vol = np.std(past_log_ret)
@@ -155,7 +155,7 @@ class btc_Trendlines(Dataset):
         ftrend_tensor = torch.from_numpy(log_ret_scaled).float().unsqueeze(0)  # (1, 60)
         ptrend_tensor = torch.from_numpy(ptrend).float()                        # (300, 91)
 
-        return ftrend_tensor, ptrend_tensor, torch.tensor(vol).float()
+        return ftrend_tensor, ptrend_tensor, vol, ftrend 
 
 
 if __name__ == '__main__':
@@ -164,3 +164,11 @@ if __name__ == '__main__':
     batch = next(iter(dl))
     print("Batch ftrend tensor shape:", batch[0].shape)
     print("Batch ptrend tensor shape:", batch[1].shape)
+
+    import matplotlib.pyplot as plt
+
+    plt.plot(batch[0][0].squeeze().numpy())
+    plt.title("Sample Future Log Returns")
+    plt.xlabel("Time")
+    plt.ylabel("Log Return")
+    plt.show()

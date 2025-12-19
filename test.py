@@ -30,7 +30,7 @@ diffusion = create_diffusion(timestep_respacing="")
 # Dataset / single batch
 dataset = btc_Trendlines(test=False, order=3, seq_len=300, pred_len=60)
 loader = DataLoader(dataset, batch_size=1, shuffle=True)
-x, y, vol = list(loader)[100]
+x, y, vol, ftrend = list(loader)[100]
 x = x.repeat(num_samples, 1, 1)
 y = y.repeat(num_samples, 1, 1)
 
@@ -65,9 +65,15 @@ sample = sample.cpu().numpy()
 gt = np.arctanh(np.clip(x[0, :].squeeze(), -0.9999, 0.9999)) * vol.numpy()[0]
 pred = np.arctanh(np.clip(sample[:, :].squeeze(), -0.9999, 0.9999)) * vol.numpy()[0]
 
+# log return to price
+last_price = ftrend[0, 0]
+gt = last_price * np.exp(np.cumsum(gt))
+pred = np.array([last_price * np.exp(np.cumsum(pred[i])) for i in range(num_samples)])
+
 for i in range(num_samples):
     plt.plot(pred[i], label='Predicted', color='orange', alpha=0.2)
 plt.plot(gt, label='Ground Truth')
+plt.plot(ftrend[0, 1:], color='green', linestyle='dashed', label='Actual Future Trendline')
 plt.tight_layout()
 plt.show()
 exit()
