@@ -19,7 +19,7 @@ num_samples = 10
 
 # Load model
 model = DiT_models["DiT-S"](input_size=(1, 60)).to(device)
-ckpt_path = "checkpoints/btc_logret.pth"
+ckpt_path = "checkpoints/btc_logprice.pth"
 state = torch.load(ckpt_path, map_location=device)
 if isinstance(state, dict) and 'model' in state:
     state = state['model']
@@ -28,9 +28,9 @@ model.eval()
 diffusion = create_diffusion(timestep_respacing="")
 
 # Dataset / single batch
-dataset = btc_Trendlines(test=False, order=3, seq_len=300, pred_len=60)
-loader = DataLoader(dataset, batch_size=1, shuffle=True)
-x, y, vol, ftrend = list(loader)[100]
+dataset = btc_Trendlines(test=True, order=3, seq_len=300, pred_len=60)
+loader = DataLoader(dataset, batch_size=256, shuffle=True)
+x, y, vol, ftrend = list(loader)[np.random.randint(0, len(loader))]
 x = x.repeat(num_samples, 1, 1)
 y = y.repeat(num_samples, 1, 1)
 
@@ -67,8 +67,8 @@ pred = np.arctanh(np.clip(sample[:, :].squeeze(), -0.9999, 0.9999)) * vol.numpy(
 
 # log return to price
 last_price = ftrend[0, 0]
-gt = last_price * np.exp(np.cumsum(gt))
-pred = np.array([last_price * np.exp(np.cumsum(pred[i])) for i in range(num_samples)])
+gt = last_price * np.exp(gt)
+pred = np.array([last_price * np.exp(pred[i]) for i in range(num_samples)])
 
 for i in range(num_samples):
     plt.plot(pred[i], label='Predicted', color='orange', alpha=0.2)

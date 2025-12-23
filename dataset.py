@@ -131,7 +131,7 @@ class btc_Trendlines(Dataset):
         f_end = f_start + self.pred_len
 
         ptrend = np.array(self.data[p_start:p_end])      # (300, 91)
-        ftrend = np.array(self.data[f_start-1:f_end, 41]) # (61,)
+        ftrend = np.array(self.data[f_start:f_end, 41]) # (60,)
 
         min_vals = ptrend.min(axis=0, keepdims=True)
         max_vals = ptrend.max(axis=0, keepdims=True)
@@ -139,11 +139,11 @@ class btc_Trendlines(Dataset):
         range_vals[range_vals == 0] = 1
         ptrend = (ptrend - min_vals) / range_vals
 
-        log_ret = np.log(ftrend[1:] / ftrend[:-1])  # (60,)
+        log_ret = np.log(ftrend/ftrend[0])  # (60,)
 
         # Use last seq_len log returns BEFORE prediction window
-        past_prices = np.array(self.data[p_start:p_end+1, 41])  # (301,)
-        past_log_ret = np.log(past_prices[1:] / past_prices[:-1])  # (300,)
+        past_prices = np.array(self.data[p_start:p_end, 41])  # (300,)
+        past_log_ret = np.log(past_prices/past_prices[0])  # (300,)
 
         vol = np.std(past_log_ret)
         if vol == 0:

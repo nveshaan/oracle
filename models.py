@@ -141,7 +141,12 @@ class TS2VecWrapper(nn.Module):
     def __init__(self, hidden_size, model='DiT-S', input_dims=91, seq_len=300, dropout_prob=0.1):
         super().__init__()
         self.ts2vec = TS2Vec(input_dims=input_dims, output_dims=hidden_size, device='mps')
-        self.ts2vec.load(f'encoder_models/checkpoints/{model}.pkl')
+        # self.ts2vec.load(f'encoder_models/checkpoints/{model}.pkl')
+        # Freeze TS2Vec parameters
+        for param in self.ts2vec._net.parameters():
+            param.requires_grad = False
+        for param in self.ts2vec.net.parameters():
+            param.requires_grad = False
         self.dropout_prob = dropout_prob
         # Learned null trendline for unconditional generation (B, seq_len, input_dims)
         self.null_trendline = nn.Parameter(torch.zeros(1, seq_len, input_dims))
